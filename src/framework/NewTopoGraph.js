@@ -1,4 +1,4 @@
-import { TopoLayout, getNodeSize } from "./TopoLayout.js";
+import { TopoLayout, getNodeBaseSize, getNodeSize } from "./TopoLayout.js";
 import { getEdgeShape, getNodeShape, registerEdgeShape, registerNodeShape } from "./Registry.js";
 import { validateGraphData } from "./TopologyGraphStore.js";
 
@@ -1272,8 +1272,8 @@ export class NewTopoGraph {
   render() {
     this.root.classList.toggle("no-animate", !this.animate);
     this.root.classList.toggle("is-performance", this.performanceMode);
-    this.renderEdges();
     this.renderNodes();
+    this.renderEdges();
     this.applyViewport();
   }
 
@@ -1309,9 +1309,14 @@ export class NewTopoGraph {
         this.nodeElementById.set(node.id, element);
       }
       element.__topoNode = node;
-      this.updateNodeElement(element, node, { type, isGroupNode, animation, animatedElements });
       if (!isPartialRender && this.nodeLayer.lastChild !== element) this.nodeLayer.appendChild(element);
       else if (!element.parentNode) this.nodeLayer.appendChild(element);
+      const sizeChanged = this.updateNodeElement(element, node, { type, isGroupNode, animation, animatedElements });
+      if (sizeChanged) {
+        const connectedEdgeIds = this.getConnectedEdgeIds([node.id]);
+        if (connectedEdgeIds.length) this.renderEdges(connectedEdgeIds);
+        this.scheduleMinimapRender();
+      }
     }
     if (animatedElements.length) this.playNodeAnimation(animatedElements, animation);
     if (!isPartialRender) this.pendingNodeAnimation = null;
@@ -1353,7 +1358,7 @@ export class NewTopoGraph {
   }
 
   updateNodeElement(element, node, { type, isGroupNode, animation, animatedElements }) {
-    const size = getNodeSize(node);
+    const size = getNodeBaseSize(node);
     const status = node.data?.status || "ok";
     const position = this.getNodeAbsolutePosition(node);
     element.className = `topo-node ${type} status-${status}`;
@@ -1393,6 +1398,43 @@ export class NewTopoGraph {
       });
       element.appendChild(deleteControl);
     }
+    return isGroupNode ? this.clearMeasuredNodeSize(node, size) : this.syncRenderedNodeSize(element, node, size);
+  }
+
+  syncRenderedNodeSize(element, node, baseSize) {
+    const measuredWidth = Math.max(Number(baseSize.width) || 0, Math.ceil(element.scrollWidth));
+    const measuredHeight = Math.max(Number(baseSize.height) || 0, Math.ceil(element.scrollHeight));
+    const nextSize = {
+      width: measuredWidth,
+      height: measuredHeight,
+    };
+    const previousSize = node.__topoMeasuredSize || baseSize;
+    const changed = Math.abs((Number(previousSize.width) || 0) - nextSize.width) >= 1
+      || Math.abs((Number(previousSize.height) || 0) - nextSize.height) >= 1;
+    const needsMeasuredSize = measuredWidth > (Number(baseSize.width) || 0)
+      || measuredHeight > (Number(baseSize.height) || 0);
+
+    if (needsMeasuredSize) {
+      Object.defineProperty(node, "__topoMeasuredSize", {
+        configurable: true,
+        enumerable: false,
+        writable: true,
+        value: nextSize,
+      });
+      element.style.width = `${nextSize.width}px`;
+      element.style.height = `${nextSize.height}px`;
+      return changed;
+    }
+
+    return this.clearMeasuredNodeSize(node, baseSize) || changed;
+  }
+
+  clearMeasuredNodeSize(node, baseSize = getNodeBaseSize(node)) {
+    const previousSize = node.__topoMeasuredSize;
+    if (!previousSize) return false;
+    delete node.__topoMeasuredSize;
+    return Math.abs((Number(previousSize.width) || 0) - (Number(baseSize.width) || 0)) >= 1
+      || Math.abs((Number(previousSize.height) || 0) - (Number(baseSize.height) || 0)) >= 1;
   }
 
   renderEdgeUpdates(ids = []) {
