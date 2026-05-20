@@ -271,10 +271,19 @@
   background: #ffffff;
   color: var(--text, var(--topo-text));
   box-shadow: 0 8px 18px rgba(31, 41, 55, 0.12);
+  box-sizing: border-box;
   cursor: pointer;
   transition: transform 240ms ease, box-shadow 160ms ease, border-color 160ms ease, opacity 160ms ease, filter 160ms ease;
   overflow: hidden;
   font: inherit;
+}
+
+.topo-node *,
+.topo-node *::before,
+.topo-node *::after,
+.topo-node::before,
+.topo-node::after {
+  box-sizing: border-box;
 }
 
 .topo-node.is-static {

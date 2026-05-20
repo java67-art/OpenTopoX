@@ -731,6 +731,18 @@ registerLayoutExecutor("graphvizDot", createDotLayoutExecutor({ engine: "dot" })
 registerLayoutExecutor("graphvizFdp", createDotLayoutExecutor({ engine: "fdp" }));
 
 export function getNodeSize(node) {
+  const baseSize = getNodeBaseSize(node);
+  const measuredSize = node?.__topoMeasuredSize;
+  if (!measuredSize || typeof measuredSize !== "object") return baseSize;
+  const measuredWidth = Number(measuredSize.width);
+  const measuredHeight = Number(measuredSize.height);
+  return {
+    width: Number.isFinite(measuredWidth) ? Math.max(Number(baseSize.width) || 0, measuredWidth) : baseSize.width,
+    height: Number.isFinite(measuredHeight) ? Math.max(Number(baseSize.height) || 0, measuredHeight) : baseSize.height,
+  };
+}
+
+export function getNodeBaseSize(node) {
   const size = node.data?.size || node.style?.size;
   if (Array.isArray(size)) return { width: size[0], height: size[1] };
   if (size && typeof size === "object") return { width: size.width, height: size.height };

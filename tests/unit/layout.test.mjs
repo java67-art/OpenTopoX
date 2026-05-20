@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { TopoLayout } from "../../src/framework/index.js";
+import { getNodeSize } from "../../src/framework/TopoLayout.js";
 
 test("TopoLayout cancels a stale worker layout when a newer request starts", async () => {
   class SlowWorker {
@@ -57,4 +58,24 @@ test("TopoLayout sync layouts produce stable node positions", () => {
   assert.equal(result.nodes.length, 2);
   assert.equal(Number.isFinite(result.nodes[0].position.x), true);
   assert.equal(Number.isFinite(result.nodes[0].position.y), true);
+});
+
+test("getNodeSize uses rendered measurements as an internal minimum", () => {
+  const node = {
+    id: "redis",
+    type: "cardLayerNode",
+    data: {
+      title: "Redis",
+      size: { width: 240, height: 118 },
+    },
+  };
+  Object.defineProperty(node, "__topoMeasuredSize", {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: { width: 240, height: 130 },
+  });
+
+  assert.deepEqual(getNodeSize(node), { width: 240, height: 130 });
+  assert.equal(Object.keys(node).includes("__topoMeasuredSize"), false);
 });
