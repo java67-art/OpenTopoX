@@ -303,6 +303,8 @@ const topo = new NewTopoGraph({
 | `grid` | 是否显示网格 |
 | `fitViewPadding` | 自动适配视图时的留白比例 |
 | `performanceEdgeLabelLimit` | 超过多少条边后自动隐藏边标签 |
+| `allowedNodeTypes` | 额外允许的自定义节点类型；已通过 `registerNodeShape()` 注册的类型会自动纳入校验 |
+| `throwOnInvalid` | 数据校验失败时直接抛错，而不是继续使用清洗后的数据渲染 |
 
 ## 7. 布局
 
@@ -394,6 +396,8 @@ graph.setLayout({ topoType: "myLayout" });
 | `setGridVisible(enabled)` | 显示或隐藏网格 |
 | `toggleFullscreen()` | 切换全屏 |
 | `getRenderStats()` | 获取渲染统计 |
+
+数据校验结果会通过 `topo:validation` 事件通知宿主。需要集中接入错误处理时，也可以在 `config` 中传入 `onValidation` 或 `onValidationError`。
 
 上下游聚焦：
 

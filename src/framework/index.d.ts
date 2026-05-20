@@ -190,6 +190,9 @@ export interface GraphApi {
   getSelected(): { type: "node" | "edge"; id: string } | null;
   getViewport(): TopologyViewport;
   setViewport(viewport?: Partial<TopologyViewport>): void;
+  isFullscreen(): boolean;
+  setFullscreen(enabled: boolean): Promise<boolean>;
+  toggleFullscreen(): Promise<boolean>;
   getRenderStats(): RenderStats;
   getContainer(): HTMLElement;
   getRootElement(): HTMLElement;
@@ -212,6 +215,10 @@ export interface NewTopoGraphOptions {
     performanceNodeLimit?: number;
     performanceTotalElementLimit?: number;
     validateData?: boolean;
+    allowedNodeTypes?: string[] | Set<string>;
+    throwOnInvalid?: boolean;
+    onValidation?: (validation: ValidationResult, detail?: Record<string, unknown>) => void;
+    onValidationError?: (validation: ValidationResult, detail?: Record<string, unknown>) => void;
     [key: string]: unknown;
   };
   style?: Partial<CSSStyleDeclaration> | Record<string, string | number>;
@@ -343,7 +350,17 @@ export declare function createRealtimeTopologyPatch(options?: Partial<TopologyGr
 export declare function normalizeRealtimeTopologyMessage(input: RealtimeTopologyMessage | string): RealtimeTopologyMessage;
 export declare function validateRealtimeTopologyMessage(message: RealtimeTopologyMessage | string, options?: Record<string, unknown>): { valid: boolean; errors: string[]; warnings: string[]; message: RealtimeTopologyMessage };
 export declare function shouldAcceptRealtimeTopologyMessage(message: RealtimeTopologyMessage | string, cursor?: Record<string, unknown>, options?: Record<string, unknown>): { accept: boolean; reason?: string; validation?: Record<string, unknown>; cursor?: Record<string, unknown> };
-export declare function validateGraphData(nodes?: TopologyNode[], edges?: TopologyEdge[], options?: Record<string, unknown>): { valid: boolean; hasWarnings: boolean; errors: string[]; warnings: string[]; nodes: TopologyNode[]; edges: TopologyEdge[]; [key: string]: unknown };
+export interface ValidationResult {
+  valid: boolean;
+  hasWarnings: boolean;
+  errors: string[];
+  warnings: string[];
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+  [key: string]: unknown;
+}
+
+export declare function validateGraphData(nodes?: TopologyNode[], edges?: TopologyEdge[], options?: Record<string, unknown>): ValidationResult;
 
 export declare function register(name: string, value?: unknown): () => void;
 export declare function registerNodeShape(type: string, shape: unknown): () => void;

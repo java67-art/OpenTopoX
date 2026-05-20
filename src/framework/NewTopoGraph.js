@@ -3,6 +3,7 @@ import { getEdgeShape, getNodeShape, registerEdgeShape, registerNodeShape } from
 import { validateGraphData } from "./TopologyGraphStore.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+let graphInstanceSeed = 0;
 
 export class NewTopoGraph {
   constructor({
@@ -56,6 +57,10 @@ export class NewTopoGraph {
     this.performanceNodeLimit = config.performanceNodeLimit ?? 1000;
     this.performanceTotalElementLimit = config.performanceTotalElementLimit ?? 2500;
     this.validateData = config.validateData ?? true;
+    this.allowedNodeTypes = config.allowedNodeTypes || [];
+    this.throwOnInvalid = config.throwOnInvalid ?? false;
+    this.onValidation = config.onValidation;
+    this.onValidationError = config.onValidationError;
     this.lightStructurePatch = config.lightStructurePatch ?? true;
     this.lightStructureNodeLimit = config.lightStructureNodeLimit ?? 6;
     this.lightStructureEdgeLimit = config.lightStructureEdgeLimit ?? 24;
@@ -73,6 +78,9 @@ export class NewTopoGraph {
     this.nodeAnimationTimer = null;
     this.pendingNodeAnimation = null;
     this.fullscreenFallback = false;
+    this.instanceId = createGraphInstanceId();
+    this.edgeMarkerId = `topo-arrow-${this.instanceId}`;
+    this.minimapShadowId = `minimap-soft-shadow-${this.instanceId}`;
     this.handleFullscreenChange = () => this.syncFullscreenState();
     this.hoverState = null;
     this.suppressNodeClick = null;
@@ -343,8 +351,9 @@ export class NewTopoGraph {
     const layoutVersion = this.layoutVersion += 1;
     this.hoverState = null;
     const validation = this.validateData
-      ? validateGraphData(nodes, edges)
+      ? validateGraphData(nodes, edges, this.getValidationOptions())
       : createValidationResult(nodes, edges);
+    this.emitValidationResult(validation, { source: "setData", layoutVersion });
     const graphNodes = validation.nodes;
     const graphEdges = validation.edges;
     const previousPositions = this.captureNodePositions();
@@ -423,6 +432,32 @@ export class NewTopoGraph {
     }
 
     return layoutResult;
+  }
+
+  getValidationOptions() {
+    return {
+      additionalAllowedNodeTypes: this.allowedNodeTypes,
+    };
+  }
+
+  emitValidationResult(validation, detail = {}) {
+    const eventDetail = {
+      ...detail,
+      validation,
+    };
+    this.onValidation?.(validation, eventDetail);
+    if (!validation.valid || validation.hasWarnings) {
+      this.onValidationError?.(validation, eventDetail);
+    }
+    this.container.dispatchEvent(new CustomEvent("topo:validation", {
+      detail: eventDetail,
+      bubbles: true,
+    }));
+    if (this.throwOnInvalid && !validation.valid) {
+      const error = new Error(`Invalid topology graph data: ${validation.errors.join("; ")}`);
+      error.validation = validation;
+      throw error;
+    }
   }
 
   async setGroupData({
@@ -741,8 +776,9 @@ export class NewTopoGraph {
     }
 
     const validation = this.validateData
-      ? validateGraphData([...nodeById.values()], [...edgeById.values()])
+      ? validateGraphData([...nodeById.values()], [...edgeById.values()], this.getValidationOptions())
       : createValidationResult([...nodeById.values()], [...edgeById.values()]);
+    this.emitValidationResult(validation, { source: "patchGraphData" });
     if (validation.errors.length) return null;
 
     this.hoverState = null;
@@ -1415,7 +1451,7 @@ export class NewTopoGraph {
   ensureEdgeDefs() {
     if (this.edgeDefs?.parentNode === this.edgeLayer) return;
     this.edgeDefs = document.createElementNS(SVG_NS, "defs");
-    this.edgeDefs.innerHTML = '<marker id="topo-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="currentColor"></path></marker>';
+    this.edgeDefs.innerHTML = `<marker id="${this.edgeMarkerId}" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="currentColor"></path></marker>`;
     this.edgeLayer.prepend(this.edgeDefs);
   }
 
@@ -1447,7 +1483,7 @@ export class NewTopoGraph {
     visible.setAttribute("d", path.d);
     visible.classList.add("topo-edge-path", `status-${edge.data?.status || "ok"}`);
     if (edgeShape?.pathClassName) visible.classList.add(...toClassList(edgeShape.pathClassName));
-    const markerEnd = edgeShape?.markerEnd === false ? "" : edgeShape?.markerEnd || "url(#topo-arrow)";
+    const markerEnd = edgeShape?.markerEnd === false ? "" : edgeShape?.markerEnd || `url(#${this.edgeMarkerId})`;
     if (markerEnd) visible.setAttribute("marker-end", markerEnd);
     applySvgAttributes(visible, edgeShape?.pathAttributes, edge);
 
@@ -1746,7 +1782,7 @@ export class NewTopoGraph {
     this.minimapSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
 
     const defs = document.createElementNS(SVG_NS, "defs");
-    defs.innerHTML = '<filter id="minimap-soft-shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-color="#0f172a" flood-opacity="0.12"/></filter>';
+    defs.innerHTML = `<filter id="${this.minimapShadowId}" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-color="#0f172a" flood-opacity="0.12"/></filter>`;
     this.minimapSvg.appendChild(defs);
 
     const nodeById = new Map(this.nodes.map((node) => [node.id, node]));
@@ -1785,6 +1821,7 @@ export class NewTopoGraph {
       rect.setAttribute("height", String(Math.max(2, size.height * scale)));
       rect.setAttribute("rx", "1.5");
       rect.setAttribute("fill", node.data?.color || getDomainColor(node.data?.domain, node.data?.status || "ok"));
+      rect.setAttribute("filter", `url(#${this.minimapShadowId})`);
       nodeLayer.appendChild(rect);
     }
     this.minimapSvg.appendChild(nodeLayer);
@@ -2316,6 +2353,11 @@ function createValidationResult(nodes = [], edges = []) {
     cyclicParents: 0,
     unknownNodeTypes: 0,
   };
+}
+
+function createGraphInstanceId() {
+  graphInstanceSeed += 1;
+  return `graph-${graphInstanceSeed}`;
 }
 
 function normalizeGraphItemList(value) {

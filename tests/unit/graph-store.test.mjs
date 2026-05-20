@@ -3,11 +3,12 @@ import test from "node:test";
 
 import {
   createRealtimeNodePatch,
-  createRealtimeTopologyPatch,
-  createRealtimeTopologySnapshot,
-  createTopologyGraphStore,
-  validateGraphData,
-} from "../../src/framework/index.js";
+	  createRealtimeTopologyPatch,
+	  createRealtimeTopologySnapshot,
+	  createTopologyGraphStore,
+	  registerNodeShape,
+	  validateGraphData,
+	} from "../../src/framework/index.js";
 
 test("validateGraphData filters destructive errors and records diagnostics", () => {
   const validation = validateGraphData([
@@ -27,6 +28,27 @@ test("validateGraphData filters destructive errors and records diagnostics", () 
   assert.equal(validation.unknownNodeTypes, 1);
   assert.deepEqual(validation.nodes.map((node) => node.id), ["api", "db"]);
   assert.deepEqual(validation.edges.map((edge) => edge.id), ["api-db"]);
+});
+
+test("validateGraphData accepts registered and additional node types", () => {
+  const unregister = registerNodeShape("customServiceNode", () => "<strong>Service</strong>");
+  try {
+    const validation = validateGraphData([
+      { id: "api", type: "customServiceNode", data: { title: "API", status: "ok" } },
+      { id: "cache", type: "configuredNode", data: { title: "Cache", status: "ok" } },
+    ], [
+      { id: "api-cache", source: "api", target: "cache", data: { status: "ok" } },
+    ], {
+      additionalAllowedNodeTypes: ["configuredNode"],
+    });
+
+    assert.equal(validation.valid, true);
+    assert.equal(validation.hasWarnings, false);
+    assert.equal(validation.unknownNodeTypes, 0);
+    assert.deepEqual(validation.nodes.map((node) => node.type), ["customServiceNode", "configuredNode"]);
+  } finally {
+    unregister();
+  }
 });
 
 test("TopologyGraphStore merges snapshots, patches, and topology changes", () => {

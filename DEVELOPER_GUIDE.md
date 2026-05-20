@@ -1055,6 +1055,8 @@ api.getPluginInstance("grid").show();
 
 公共文档推荐直接使用 `registerNodeShape()` 和 `registerEdgeShape()`。`registerTopologyShape(kind, type, shape)` 是旧预设入口的兼容封装，`kind === "edge"` 时转发到边 shape 注册，否则转发到节点 shape 注册。
 
+已通过 `registerNodeShape()` 注册的节点类型会自动进入数据校验 allow-list；如果宿主只想声明类型而暂不注册渲染器，可以通过 `config.allowedNodeTypes` 补充允许列表。返回字符串的自定义 shape、Tooltip 内容和 FlowToolbar children 都按 trusted HTML 处理；如果内容来自用户输入，优先返回 DOM `Node` 并自行转义。
+
 ## 21. 可选工具栏
 
 `FlowToolbar` 是可选模块。它不参与核心渲染，只是调用图实例 API：
@@ -1078,6 +1080,7 @@ new FlowToolbar({
 - center
 - zoom in
 - zoom out
+- fullscreen
 - layout 切换
 
 如果宿主应用有自己的 UI，可以不使用 `FlowToolbar`。
