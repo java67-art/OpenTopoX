@@ -226,8 +226,11 @@
   border-radius: 0;
 }
 
+.new-topo-graph.is-panning .topo-svg,
+.new-topo-graph.is-panning .topo-node-layer,
 .new-topo-graph.is-node-dragging .topo-node,
 .new-topo-graph.is-node-dragging .topo-svg,
+.new-topo-graph.is-node-dragging .topo-node-layer,
 .no-animate .topo-node,
 .no-animate .topo-svg,
 .no-animate .topo-node-layer {
