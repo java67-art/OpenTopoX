@@ -8,6 +8,8 @@
   --topo-warn: #d9822b;
   --topo-critical: #d64545;
   --topo-edge: #8ba4bd;
+  --topo-dot: #dce6f0;
+  --topo-grid-line: rgba(37, 99, 235, 0.08);
 }
 
 .flow-toolbar,
@@ -169,28 +171,43 @@
   overflow: hidden;
   cursor: grab;
   background-color: var(--topo-bg);
-  background-image: radial-gradient(#dce6f0 1px, transparent 1px);
+  background-image: radial-gradient(var(--topo-dot) 1px, transparent 1px);
   background-size: 18px 18px;
   color: var(--text, var(--topo-text));
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .new-topo-graph.theme-aurora {
-  background-image: radial-gradient(#ccebe5 1px, transparent 1px);
+  --topo-bg: #f5fbf8;
+  --topo-primary: #08856f;
+  --topo-line: #ccebe5;
+  --topo-edge: #6aa99e;
+  --topo-dot: #ccebe5;
+  --topo-grid-line: rgba(8, 133, 111, 0.12);
 }
 
 .new-topo-graph.theme-severity {
-  background-image: radial-gradient(#ead8d6 1px, transparent 1px);
+  --topo-bg: #fff8f6;
+  --topo-primary: #c2410c;
+  --topo-line: #ead8d6;
+  --topo-edge: #bc8b82;
+  --topo-dot: #ead8d6;
+  --topo-grid-line: rgba(194, 65, 12, 0.12);
 }
 
 .new-topo-graph.theme-neutral {
-  background-image: radial-gradient(#d8dde5 1px, transparent 1px);
+  --topo-bg: #ffffff;
+  --topo-primary: #0064c8;
+  --topo-line: #d9e1ea;
+  --topo-edge: #8ba4bd;
+  --topo-dot: #d8dde5;
+  --topo-grid-line: rgba(37, 99, 235, 0.08);
 }
 
 .new-topo-graph.has-grid {
   background-image:
-    linear-gradient(rgba(37, 99, 235, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(37, 99, 235, 0.08) 1px, transparent 1px);
+    linear-gradient(var(--topo-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--topo-grid-line) 1px, transparent 1px);
   background-size: 24px 24px;
 }
 
@@ -242,6 +259,8 @@
 
 .topo-node {
   position: absolute;
+  left: 0;
+  top: 0;
   z-index: 3;
   pointer-events: auto;
   padding: 11px 12px;
@@ -762,7 +781,6 @@
 
 .topo-minimap-node {
   opacity: 0.58;
-  filter: url(#minimap-soft-shadow);
 }
 
 .topo-minimap-viewport {

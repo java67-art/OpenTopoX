@@ -5,6 +5,7 @@ export class FlowToolbar {
     onLayoutChange,
     handleReset,
     enableReLayout = false,
+    enableFullscreen = true,
     children,
     layouts,
   }) {
@@ -13,6 +14,7 @@ export class FlowToolbar {
     this.onLayoutChange = onLayoutChange;
     this.handleReset = handleReset;
     this.enableReLayout = enableReLayout;
+    this.enableFullscreen = enableFullscreen;
     this.children = children;
     this.layouts = layouts || [
       { key: "fdp", label: "FDP", title: "Force layout" },
@@ -24,8 +26,21 @@ export class FlowToolbar {
     ];
     this.activeLayout = "dot";
     this.zoom = 1;
+    this.fullscreen = false;
+    this.handleViewport = (event) => this.setZoom(event.detail.zoom);
+    this.handleFullscreen = (event) => this.setFullscreen(event.detail.enabled);
+    this.handleClick = (event) => this.handleToolbarClick(event);
+    this.graphEventRoot = null;
     this.render();
     this.bindGraphEvents();
+  }
+
+  getGraphApi() {
+    return this.graph?.getGraph?.() || this.graph;
+  }
+
+  getGraphEventRoot() {
+    return this.graph?.container || this.getGraphApi()?.getContainer?.();
   }
 
   setActiveLayout(layout) {
@@ -41,10 +56,17 @@ export class FlowToolbar {
     if (label) label.textContent = `${Math.round(this.zoom * 100)}%`;
   }
 
+  setFullscreen(enabled) {
+    this.fullscreen = Boolean(enabled);
+    this.container.querySelector("[data-action='fullscreen']")?.classList.toggle("active", this.fullscreen);
+  }
+
   bindGraphEvents() {
-    const root = this.graph?.container;
+    const root = this.getGraphEventRoot();
     if (!root) return;
-    root.addEventListener("topo:viewport", (event) => this.setZoom(event.detail.zoom));
+    this.graphEventRoot = root;
+    root.addEventListener("topo:viewport", this.handleViewport);
+    root.addEventListener("topo:fullscreen", this.handleFullscreen);
   }
 
   render() {
@@ -53,6 +75,7 @@ export class FlowToolbar {
     }).join("");
     const reset = this.handleReset ? '<button type="button" title="Reset" data-action="reset">RST</button>' : "";
     const relayout = this.enableReLayout ? '<button type="button" title="Re-layout" data-action="relayout">RLY</button>' : "";
+    const fullscreen = this.enableFullscreen ? '<button type="button" title="Fullscreen" data-action="fullscreen">FULL</button>' : "";
     this.container.innerHTML = `
       <div class="flow-toolbar" aria-label="Topology toolbar">
         <button type="button" title="Fit view" data-action="fit">F</button>
@@ -62,32 +85,41 @@ export class FlowToolbar {
         <button type="button" title="Center" data-action="center">C</button>
         ${reset}
         ${relayout}
+        ${fullscreen}
         <div class="toolbar-divider"></div>
         ${layoutButtons}
         <div data-role="toolbar-children"></div>
       </div>
     `;
     this.setActiveLayout(this.activeLayout);
-    this.setZoom(this.graph?.getGraph?.().getViewport?.().zoom ?? 1);
+    const graph = this.getGraphApi();
+    this.setZoom(graph?.getViewport?.().zoom ?? 1);
+    this.setFullscreen(graph?.isFullscreen?.() ?? false);
     this.renderChildren();
 
-    this.container.addEventListener("click", (event) => {
-      const button = event.target.closest("button");
-      if (!button) return;
+    this.container.addEventListener("click", this.handleClick);
+  }
 
-      const graph = this.graph.getGraph();
-      if (button.dataset.action === "fit") graph.fitView({ padding: 0.16 });
-      if (button.dataset.action === "center") graph.fitCenter();
-      if (button.dataset.action === "zoom-in") graph.zoomTo(graph.getViewport().zoom + 0.12);
-      if (button.dataset.action === "zoom-out") graph.zoomTo(graph.getViewport().zoom - 0.12);
-      if (button.dataset.action === "reset") this.handleReset?.();
-      if (button.dataset.action === "relayout") graph.setData({ ...graph.getData(), clearStatus: true, preserveOrigin: true });
+  async handleToolbarClick(event) {
+    const button = event.target.closest("button");
+    if (!button) return;
 
-      if (button.dataset.layout) {
-        this.setActiveLayout(button.dataset.layout);
-        this.onLayoutChange?.(button.dataset.layout);
-      }
-    });
+    const graph = this.getGraphApi();
+    if (button.dataset.action === "fit") graph.fitView?.({ padding: 0.16 });
+    if (button.dataset.action === "center") graph.fitCenter?.();
+    if (button.dataset.action === "zoom-in") graph.zoomTo?.(graph.getViewport().zoom + 0.12);
+    if (button.dataset.action === "zoom-out") graph.zoomTo?.(graph.getViewport().zoom - 0.12);
+    if (button.dataset.action === "reset") this.handleReset?.();
+    if (button.dataset.action === "relayout") graph.setData?.({ ...graph.getData(), clearStatus: true, preserveOrigin: true });
+    if (button.dataset.action === "fullscreen") {
+      const enabled = await graph.toggleFullscreen?.();
+      this.setFullscreen(Boolean(enabled));
+    }
+
+    if (button.dataset.layout) {
+      this.setActiveLayout(button.dataset.layout);
+      this.onLayoutChange?.(button.dataset.layout);
+    }
   }
 
   renderChildren() {
@@ -105,6 +137,16 @@ export class FlowToolbar {
     if (host.childNodes.length) {
       host.before(Object.assign(document.createElement("div"), { className: "toolbar-divider" }));
     }
+  }
+
+  destroy() {
+    this.container.removeEventListener("click", this.handleClick);
+    if (this.graphEventRoot) {
+      this.graphEventRoot.removeEventListener("topo:viewport", this.handleViewport);
+      this.graphEventRoot.removeEventListener("topo:fullscreen", this.handleFullscreen);
+      this.graphEventRoot = null;
+    }
+    this.container.innerHTML = "";
   }
 }
 

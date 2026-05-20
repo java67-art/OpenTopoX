@@ -4,6 +4,7 @@ import {
   createRealtimeTopologyCursor,
   normalizeRealtimeTopologyMessage,
 } from "./RealtimeTopologyProtocol.js";
+import { getRegisteredNodeShapes } from "./Registry.js";
 
 export const TOPOLOGY_GRAPH_STORE_EVENTS = Object.freeze({
   CHANGE: "change",
@@ -361,10 +362,12 @@ const DEFAULT_ALLOWED_NODE_TYPES = new Set([
 
 export function validateGraphData(nodes = [], edges = [], {
   allowedNodeTypes = DEFAULT_ALLOWED_NODE_TYPES,
+  additionalAllowedNodeTypes = [],
   validStatuses = VALID_TOPOLOGY_STATUSES,
 } = {}) {
   const errors = [];
   const warnings = [];
+  const effectiveAllowedNodeTypes = resolveAllowedNodeTypes(allowedNodeTypes, additionalAllowedNodeTypes);
   const nodeIds = new Set();
   const edgeIds = new Set();
   const outputNodes = [];
@@ -399,7 +402,7 @@ export function validateGraphData(nodes = [], edges = [], {
       missingTitles += 1;
       warnings.push(`missing node title: ${cloned.id}`);
     }
-    if (cloned.type && allowedNodeTypes && !allowedNodeTypes.has(cloned.type)) {
+    if (cloned.type && effectiveAllowedNodeTypes && !effectiveAllowedNodeTypes.has(cloned.type)) {
       unknownNodeTypes += 1;
       warnings.push(`unknown node type: ${cloned.id} -> ${cloned.type}`);
     }
@@ -459,6 +462,22 @@ export function validateGraphData(nodes = [], edges = [], {
     cyclicParents,
     unknownNodeTypes,
   };
+}
+
+function resolveAllowedNodeTypes(allowedNodeTypes, additionalAllowedNodeTypes = []) {
+  if (!allowedNodeTypes) return null;
+  const allowed = new Set(normalizeTypeList(allowedNodeTypes));
+  for (const type of normalizeTypeList(additionalAllowedNodeTypes)) allowed.add(type);
+  for (const { type } of getRegisteredNodeShapes()) allowed.add(type);
+  return allowed;
+}
+
+function normalizeTypeList(value) {
+  if (!value) return [];
+  if (value instanceof Set) return [...value].filter(Boolean);
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value === "string") return [value];
+  return [];
 }
 
 function hasNodeTitle(node) {

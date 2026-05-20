@@ -19,6 +19,7 @@ export class Tooltip {
     this.container.appendChild(this.tooltip);
     this.timer = null;
     this.context = null;
+    this.destroyed = false;
     this.handlePointerOver = (event) => this.schedule(event);
     this.handlePointerMove = (event) => this.move(event.clientX, event.clientY);
     this.handlePointerOut = (event) => this.handleOut(event);
@@ -35,6 +36,7 @@ export class Tooltip {
   }
 
   schedule(event) {
+    if (this.destroyed) return;
     const context = resolveGraphTarget(event, this.getGraphApi());
     if (context.type === "canvas" || context.element === this.context?.element) return;
     window.clearTimeout(this.timer);
@@ -44,12 +46,14 @@ export class Tooltip {
       graph: this.getGraphApi(),
     };
     this.timer = window.setTimeout(() => {
+      if (this.destroyed) return;
       this.show(this.context);
       this.move(event.clientX, event.clientY);
     }, this.delay);
   }
 
   show(context) {
+    if (this.destroyed) return;
     const content = this.renderContent?.(context) || defaultTooltipContent(context);
     if (!content) {
       this.hide();
@@ -90,6 +94,8 @@ export class Tooltip {
   }
 
   destroy() {
+    this.hide();
+    this.destroyed = true;
     this.container.removeEventListener("pointerover", this.handlePointerOver);
     this.container.removeEventListener("pointermove", this.handlePointerMove);
     this.container.removeEventListener("pointerout", this.handlePointerOut);

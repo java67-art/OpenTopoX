@@ -24,11 +24,13 @@ export class ContextMenu {
     this.handleKeydown = (event) => {
       if (event.key === "Escape") this.close();
     };
+    this.handleMenuClick = (event) => this.handleMenuClickEvent(event);
+    this.handleResize = () => this.close();
     this.container.addEventListener("contextmenu", this.handleContextMenu);
-    this.menu.addEventListener("click", (event) => this.handleMenuClick(event));
+    this.menu.addEventListener("click", this.handleMenuClick);
     document.addEventListener("click", this.handleDocumentClick);
     document.addEventListener("keydown", this.handleKeydown);
-    window.addEventListener("resize", () => this.close(), { passive: true });
+    window.addEventListener("resize", this.handleResize, { passive: true });
   }
 
   getGraphApi() {
@@ -80,7 +82,7 @@ export class ContextMenu {
     this.menu.style.top = `${top}px`;
   }
 
-  handleMenuClick(event) {
+  handleMenuClickEvent(event) {
     const button = event.target.closest("[data-menu-index]");
     if (!button) return;
     const item = this.currentItems?.[Number(button.dataset.menuIndex)];
@@ -100,8 +102,10 @@ export class ContextMenu {
 
   destroy() {
     this.container.removeEventListener("contextmenu", this.handleContextMenu);
+    this.menu.removeEventListener("click", this.handleMenuClick);
     document.removeEventListener("click", this.handleDocumentClick);
     document.removeEventListener("keydown", this.handleKeydown);
+    window.removeEventListener("resize", this.handleResize);
     this.menu.remove();
   }
 }
