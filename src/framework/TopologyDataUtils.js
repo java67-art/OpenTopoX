@@ -65,28 +65,34 @@ export function filterTopologyData({
 }
 
 export function getDataByNodeGroup(nodeIds = [], edgeIds = [], nodes = [], edges = [], { degree = 1 } = {}) {
-  const relatedNodes = new Set(nodeIds);
+  const seedNodes = new Set(nodeIds);
+  const relatedNodes = new Set(seedNodes);
   const relatedEdges = new Set(edgeIds);
   const maxDegree = Math.max(1, Number(degree) || 1);
+  const edgeEndpointNodes = new Set();
 
   for (const edge of edges) {
     if (!relatedEdges.has(edge.id)) continue;
+    edgeEndpointNodes.add(edge.source);
+    edgeEndpointNodes.add(edge.target);
     relatedNodes.add(edge.source);
     relatedNodes.add(edge.target);
   }
 
-  let frontier = new Set(relatedNodes);
+  let frontier = seedNodes.size ? new Set(seedNodes) : edgeEndpointNodes;
+  const expandedNodes = new Set(frontier);
   for (let level = 0; level < maxDegree && frontier.size; level += 1) {
     const next = new Set();
     for (const edge of edges) {
       const touches = frontier.has(edge.source) || frontier.has(edge.target);
       if (!touches) continue;
       relatedEdges.add(edge.id);
-      if (!relatedNodes.has(edge.source)) next.add(edge.source);
-      if (!relatedNodes.has(edge.target)) next.add(edge.target);
+      if (!expandedNodes.has(edge.source)) next.add(edge.source);
+      if (!expandedNodes.has(edge.target)) next.add(edge.target);
       relatedNodes.add(edge.source);
       relatedNodes.add(edge.target);
     }
+    for (const nodeId of next) expandedNodes.add(nodeId);
     frontier = next;
   }
 
