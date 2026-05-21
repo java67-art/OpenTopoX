@@ -381,6 +381,11 @@ graph.setLayout({ topoType: "myLayout" });
 | `updateNode(id, patch)` | 更新单个节点 |
 | `updateNodeData(id, patch)` | 更新单个节点 `data` |
 | `selectNode(id)` | 选中节点 |
+| `getSelection()` / `setSelection(selection)` | 读取或设置节点/边多选集合 |
+| `selectArea(rect)` | 使用画布坐标框选节点和相交边 |
+| `selectVisible()` / `invertSelection()` | 选择可见范围或对可见范围反选 |
+| `selectByCriteria(criteria)` | 按 domain/status/tag/type/id 等条件批量选择 |
+| `extractContext(options)` / `copyContext(options)` | 生成或复制 Agent context |
 | `focusNode(id)` | 聚焦节点 |
 | `handleFocusNode(id, options)` | 只展示节点上下游关系 |
 | `showOriginData(options)` | 恢复原始拓扑 |
@@ -738,7 +743,87 @@ const mergedEdges = mergeParallelEdges(edges, {
 });
 ```
 
-## 15. AgentLoop 和 Copilot 图
+## 15. Agent Bridge
+
+Agent Bridge 用于把用户在拓扑图中看到或选择的对象提取为 Agent context。默认交互：
+
+- 普通点击节点或边：单选。
+- `Cmd/Ctrl + Click`：追加或取消选择，Control-click 触发右键菜单时也会保留追加选择语义。
+- `Esc`：清空选择。
+- 工具栏 `Select area` 或画布空白处 `Shift + Drag`：框选区域内节点，并选中穿过区域的边。
+- 未选择对象时复制 context：默认提取当前可见视图。
+
+```js
+import { ContextMenu, FlowToolbar, NewTopoGraph } from "./src/framework/index.js";
+
+const topo = new NewTopoGraph({
+  container,
+  config: {
+    minimap: true,
+    selectionMode: "default",
+  },
+});
+
+const graph = topo.getGraph();
+
+new FlowToolbar({
+  container: document.querySelector("#toolbar"),
+  graph,
+  enableContextCopy: true,
+  enableAreaSelection: true,
+  contextOptions: {
+    scope: "selected",
+    includeMode: "connectedEdges",
+    maxNodes: 80,
+    maxEdges: 160,
+  },
+});
+
+new ContextMenu({
+  container,
+  graph,
+  enableContextCopy: true,
+  contextOptions: { scope: "selected", includeMode: "connectedEdges" },
+});
+
+container.addEventListener("topo:context-copy", (event) => {
+  console.log(event.detail.copied, event.detail.context.summary);
+});
+
+// 也可以直接调用 API。没有选择对象时可改用 scope: "visible"。
+await graph.copyContext({
+  scope: graph.getSelection().nodes.length ? "selected" : "visible",
+  includeMode: "oneHop",
+});
+```
+
+常用 Agent Bridge API：
+
+| 方法 | 说明 |
+| --- | --- |
+| `getSelection()` | 返回 `{ nodes, edges, primary }` |
+| `setSelection(selection)` | 设置多选集合 |
+| `toggleSelectionItem({ type, id })` | 追加或取消选择节点/边 |
+| `clearSelection()` | 清空选择 |
+| `selectArea(rect)` | 使用画布坐标框选节点和相交边 |
+| `selectVisible()` | 选择当前视口内节点和边 |
+| `invertSelection({ scope: "visible" })` | 对当前可见范围反选 |
+| `selectByCriteria(criteria)` | 按 `domain`、`status`、`tag` 等条件批量选择 |
+| `setSelectionMode("area")` | 进入框选模式 |
+| `getVisibleGraphData()` | 获取当前视口内节点和内部边 |
+| `extractContext(options)` | 生成 `opentopox.agent-context.v1` |
+| `copyContext(options)` | 复制 Markdown + JSON context 到剪切板 |
+
+`includeMode` 控制 context 如何从选择集合扩展：
+
+| 模式 | 说明 |
+| --- | --- |
+| `explicit` | 只包含显式选择对象；选中边会补齐两端节点 |
+| `connectedEdges` | 选中节点之间的内部边自动进入 context |
+| `oneHop` | 在内部边基础上补齐一跳上下游 |
+| `visible` | 使用当前可见视图 |
+
+## 16. AgentLoop 和 Copilot 图
 
 AgentLoop 图支持边上插入算子、删除算子和专用节点类型。
 
@@ -774,7 +859,7 @@ const topo = new AgentLoopTopoGraph({
 graph.setGraphType("agentloop");
 ```
 
-## 16. 预设图入口
+## 17. 预设图入口
 
 需要按常见图类型快速创建实例时，可以使用轻量入口：
 
@@ -817,7 +902,7 @@ const topo = createTopologyGraph({
 | `map` / `spatial` | `SpatialTopologyGraph` |
 | `flow` | `FlowTopologyGraph` |
 
-## 17. 事件
+## 18. 事件
 
 框架会在容器上派发 DOM `CustomEvent`：
 
@@ -828,6 +913,12 @@ const topo = createTopologyGraph({
 | `topo:fullscreen` | 全屏状态变化 |
 | `topo:node-drag` | 节点拖拽结束 |
 | `topo:node-animation` | 节点动画完成 |
+| `topo:selection-change` | 节点/边选择集合变化 |
+| `topo:selection-mode-change` | 选择模式变化 |
+| `topo:selection-area-start` | 开始框选 |
+| `topo:selection-area-end` | 完成框选 |
+| `topo:context-extract` | Agent context 已生成 |
+| `topo:context-copy` | Agent context 已写入剪切板或返回 fallback |
 | `topo:agentloop-insert` | AgentLoop 插入节点 |
 | `topo:agentloop-delete` | AgentLoop 删除节点 |
 | `topo:context-menu` | 右键菜单打开 |
@@ -842,7 +933,7 @@ graph.getContainer().addEventListener("topo:render", (event) => {
 });
 ```
 
-## 18. 样式和主题
+## 19. 样式和主题
 
 直接引入框架样式：
 
@@ -879,7 +970,7 @@ graph.setTheme("severity");
 }
 ```
 
-## 19. 性能建议
+## 20. 性能建议
 
 - 大图优先使用 `workerDot`、`workerFdp`、`layer` 或 `entityFlow`。
 - 节点超过业务可读范围时，先使用 `createEntityTopologyView()` 分组和限制数量。
@@ -887,7 +978,7 @@ graph.setTheme("severity");
 - 频繁筛选时复用原始 `nodes`、`edges`，只把过滤结果交给 `graph.setData()`。
 - 页面销毁时调用 `topo.destroy()`，并销毁自行创建的 `ContextMenu`、`Tooltip`。
 
-## 20. 常见问题
+## 21. 常见问题
 
 ### 图不显示
 
@@ -909,7 +1000,7 @@ graph.setTheme("severity");
 
 不要把业务 SDK 写入框架。推荐使用 `createCloudResourceQueryProvider()` 或自行在业务层查询后转换为标准 `nodes`、`edges`。
 
-## 21. 本仓库 Demo
+## 22. 本仓库 Demo
 
 本仓库包含两个验证入口：
 

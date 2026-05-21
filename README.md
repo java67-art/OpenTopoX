@@ -23,6 +23,8 @@ OpenTopoX 不内置第三方图渲染、布局或应用框架运行时。npm 包
   `entityFlow`, and `preset`.
 - Runtime graph API for data updates, viewport control, selection, focus,
   filtering, and incremental patch application.
+- Agent Bridge context extraction for visible views, selected nodes/edges,
+  neighborhood expansion, redaction, and clipboard handoff.
 - Realtime topology protocol helpers, WebSocket/SSE/polling/manual adapters,
   graph store, batching scheduler, and stale-message guards.
 - Optional UI helpers for toolbar controls, legends, context menus, tooltips,
@@ -32,6 +34,7 @@ OpenTopoX 不内置第三方图渲染、布局或应用框架运行时。npm 包
 - 使用 DOM/SVG 渲染拓扑节点、Bezier 连线、标签、方向箭头、小地图、主题和大图性能模式。
 - 内置 `dot`、`fdp`、`layer`、`xyFlow`、`radial`、`grid`、`entityFlow`、`preset` 布局。
 - 提供运行时图 API，支持数据更新、视口控制、选择、聚焦、过滤和增量 patch。
+- 提供 Agent Bridge 上下文提取能力，支持可见视图、选中节点/边、邻居扩展、脱敏和剪切板传递。
 - 提供实时拓扑协议工具、WebSocket/SSE/polling/manual 适配器、Graph Store、批处理调度器和旧消息防护。
 - 提供可选 UI 组件，包括工具栏、图例、右键菜单、Tooltip、详情抽屉和 shape 注册。
 - 提供公开 ESM 入口的 TypeScript 声明。
@@ -214,6 +217,8 @@ import {
   getDataByNodeGroup,
   processParallelEdges,
   mergeParallelEdges,
+  createTopologyContext,
+  formatTopologyContextAsMarkdown,
   createRealtimeTopologySnapshot,
   createRealtimeNodePatch,
   createRealtimeEdgePatch,

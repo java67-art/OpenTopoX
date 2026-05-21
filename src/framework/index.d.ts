@@ -1,5 +1,9 @@
 export type TopologyStatus = "ok" | "warn" | "critical" | (string & {});
 export type TopologyDirection = "upstream" | "downstream" | "both";
+export type TopologyContextScope = "visible" | "selected" | "neighborhood" | "custom";
+export type TopologyContextIncludeMode = "explicit" | "connectedEdges" | "oneHop" | "visible";
+export type TopologySelectionMode = "default" | "area";
+export type TopologySelectionKind = "node" | "edge";
 export type RealtimeTopologyMessageType = "snapshot" | "nodePatch" | "edgePatch" | "topologyPatch";
 export type TopologyDataTransport = "manual" | "websocket" | "sse" | "polling";
 export type TopologyConnectionStatus = "idle" | "connecting" | "live" | "reconnecting" | "stale" | "offline";
@@ -79,6 +83,105 @@ export interface TopologyEdge {
 export interface TopologyGraphData {
   nodes: TopologyNode[];
   edges: TopologyEdge[];
+}
+
+export interface TopologySelectionItem {
+  type: TopologySelectionKind;
+  id: string;
+}
+
+export interface TopologySelection {
+  nodes: string[];
+  edges: string[];
+  primary?: TopologySelectionItem | null;
+}
+
+export interface TopologySelectionCriteria {
+  id?: string;
+  ids?: string[] | Set<string>;
+  nodeId?: string;
+  nodeIds?: string[] | Set<string>;
+  edgeId?: string;
+  edgeIds?: string[] | Set<string>;
+  type?: string;
+  types?: string[] | Set<string>;
+  domain?: string;
+  domains?: string[] | Set<string>;
+  status?: TopologyStatus;
+  statuses?: TopologyStatus[] | Set<TopologyStatus>;
+  tag?: string;
+  tags?: string[] | Set<string>;
+  group?: string;
+  groups?: string[] | Set<string>;
+  source?: string;
+  sources?: string[] | Set<string>;
+  target?: string;
+  targets?: string[] | Set<string>;
+  predicate?: (item: TopologyNode | TopologyEdge, kind: TopologySelectionKind) => boolean;
+  [key: string]: unknown;
+}
+
+export interface TopologyContextOptions {
+  scope?: TopologyContextScope;
+  includeMode?: TopologyContextIncludeMode;
+  ids?: string[];
+  degree?: number;
+  direction?: TopologyDirection;
+  includeEdges?: boolean;
+  includeViewport?: boolean;
+  includeMetrics?: boolean;
+  maxNodes?: number;
+  maxEdges?: number;
+  redaction?: {
+    allowFields?: string[];
+    denyFields?: string[];
+  };
+  format?: "json" | "markdown" | "both";
+  [key: string]: unknown;
+}
+
+export interface TopologyContextEnvelope {
+  schema: "opentopox.agent-context.v1";
+  createdAt: string;
+  source: {
+    library: "opentopox";
+    graphType: string;
+    layout?: string;
+    version?: string;
+  };
+  scope: {
+    type: TopologyContextScope;
+    includeMode?: TopologyContextIncludeMode;
+    selected?: TopologySelectionItem[];
+    visibleRect?: { x: number; y: number; width: number; height: number };
+    degree?: number;
+    direction?: string;
+  };
+  viewport?: TopologyViewport;
+  summary: string;
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+  meta: {
+    nodeCount: number;
+    edgeCount: number;
+    originalNodeCount?: number;
+    originalEdgeCount?: number;
+    truncated: boolean;
+    redactedFields: string[];
+  };
+}
+
+export interface SerializedTopologyContext {
+  envelope: TopologyContextEnvelope;
+  json: string;
+  markdown: string;
+}
+
+export interface CopyTopologyContextResult {
+  copied: boolean;
+  text: string;
+  context: TopologyContextEnvelope;
+  error?: unknown;
 }
 
 export interface TopologyPatchItem<TData extends Record<string, unknown> = Record<string, unknown>> {
@@ -181,6 +284,21 @@ export interface GraphApi {
   zoomTo(zoom: number): void;
   focusNode(id: string): void;
   selectNode(id: string, options?: { emit?: boolean }): TopologyNode | null;
+  getSelection(): TopologySelection;
+  setSelection(selection: Partial<TopologySelection>, options?: { emit?: boolean; render?: boolean }): TopologySelection;
+  toggleSelectionItem(item: TopologySelectionItem, options?: { emit?: boolean }): TopologySelection;
+  clearSelection(options?: { emit?: boolean }): TopologySelection;
+  selectArea(rect: { x: number; y: number; width: number; height: number }, options?: { append?: boolean; emit?: boolean; includeEdges?: boolean; edgeMode?: "intersect" | "connected" }): TopologySelection;
+  selectVisible(options?: { append?: boolean; emit?: boolean; includeEdges?: boolean }): TopologySelection;
+  invertSelection(options?: { scope?: "visible" | "all"; emit?: boolean; includeEdges?: boolean }): TopologySelection;
+  selectByCriteria(criteria?: TopologySelectionCriteria, options?: { append?: boolean; emit?: boolean; visibleOnly?: boolean; includeEdges?: boolean }): TopologySelection;
+  setSelectionMode(mode: TopologySelectionMode): TopologySelectionMode;
+  getSelectionMode(): TopologySelectionMode;
+  getVisibleGraphData(options?: { visibleRect?: { x: number; y: number; width: number; height: number } }): TopologyGraphData;
+  extractContext(options?: TopologyContextOptions & { format?: "json" }): TopologyContextEnvelope;
+  extractContext(options?: TopologyContextOptions & { format: "markdown" }): string;
+  extractContext(options?: TopologyContextOptions & { format: "both" }): SerializedTopologyContext;
+  copyContext(options?: TopologyContextOptions & { text?: string }): Promise<CopyTopologyContextResult>;
   updateNode(id: string, patch: Partial<TopologyNode> | ((node: TopologyNode) => Partial<TopologyNode> | null | undefined)): TopologyNode | null;
   updateNodeData(id: string, patch: Partial<TopologyNodeData>): TopologyNode | null;
   updateEdge(id: string, patch: Partial<TopologyEdge> | ((edge: TopologyEdge) => Partial<TopologyEdge> | null | undefined)): TopologyEdge | null;
@@ -240,6 +358,15 @@ export declare class NewTopoGraph {
   setLayout(options?: LayoutOptions, nodeType?: string): this;
   setData(data?: SetDataOptions): Promise<unknown>;
   setGroupData(data?: Record<string, unknown>): Promise<unknown>;
+  getSelection(): TopologySelection;
+  setSelection(selection: Partial<TopologySelection>, options?: { emit?: boolean; render?: boolean }): TopologySelection;
+  clearSelection(options?: { emit?: boolean }): TopologySelection;
+  selectArea(rect: { x: number; y: number; width: number; height: number }, options?: { append?: boolean; emit?: boolean; includeEdges?: boolean; edgeMode?: "intersect" | "connected" }): TopologySelection;
+  selectVisible(options?: { append?: boolean; emit?: boolean; includeEdges?: boolean }): TopologySelection;
+  invertSelection(options?: { scope?: "visible" | "all"; emit?: boolean; includeEdges?: boolean }): TopologySelection;
+  selectByCriteria(criteria?: TopologySelectionCriteria, options?: { append?: boolean; emit?: boolean; visibleOnly?: boolean; includeEdges?: boolean }): TopologySelection;
+  extractContext(options?: TopologyContextOptions): TopologyContextEnvelope | string | SerializedTopologyContext;
+  copyContext(options?: TopologyContextOptions & { text?: string }): Promise<CopyTopologyContextResult>;
   destroy(): void;
 }
 
@@ -338,10 +465,16 @@ export declare const TOPOLOGY_DATA_ADAPTER_EVENTS: Record<string, string>;
 export declare const TOPOLOGY_GRAPH_STORE_EVENTS: Record<string, string>;
 export declare const TOPOLOGY_GRAPH_STORE_STATUS: Record<string, TopologyConnectionStatus>;
 export declare const TOPOLOGY_UPDATE_SCHEDULER_EVENTS: Record<string, string>;
+export declare const TOPOLOGY_CONTEXT_SCHEMA: "opentopox.agent-context.v1";
 
 export declare function createTopologyDataAdapter(options?: Record<string, unknown>): TopologyDataAdapter;
 export declare function createTopologyGraphStore(options?: ConstructorParameters<typeof TopologyGraphStore>[0]): TopologyGraphStore;
 export declare function createTopologyUpdateScheduler(options?: ConstructorParameters<typeof TopologyUpdateScheduler>[0]): TopologyUpdateScheduler;
+export declare function createTopologyContext(options?: { nodes?: TopologyNode[]; edges?: TopologyEdge[]; selection?: TopologySelection; visibleRect?: { x: number; y: number; width: number; height: number }; viewport?: TopologyViewport; source?: Record<string, unknown>; options?: TopologyContextOptions }): TopologyContextEnvelope;
+export declare function resolveContextGraph(options?: { nodes?: TopologyNode[]; edges?: TopologyEdge[]; selection?: TopologySelection; visibleRect?: { x: number; y: number; width: number; height: number }; scope?: TopologyContextScope; includeMode?: TopologyContextIncludeMode; degree?: number; direction?: TopologyDirection }): TopologyGraphData;
+export declare function getVisibleGraphData(options?: { nodes?: TopologyNode[]; edges?: TopologyEdge[]; visibleRect?: { x: number; y: number; width: number; height: number } }): TopologyGraphData;
+export declare function formatTopologyContextAsMarkdown(context: TopologyContextEnvelope): string;
+export declare function serializeTopologyContext(context: TopologyContextEnvelope, options?: { format?: "json" | "markdown" | "both" }): TopologyContextEnvelope | string | SerializedTopologyContext;
 export declare function createRealtimeTopologyMessage(options?: Partial<RealtimeTopologyMessage>): RealtimeTopologyMessage;
 export declare function createRealtimeTopologySnapshot(options?: { nodes?: TopologyNode[]; edges?: TopologyEdge[]; payload?: Record<string, unknown>; [key: string]: unknown }): RealtimeTopologyMessage;
 export declare function createRealtimeNodePatch(options?: { patches?: Array<TopologyPatchItem<TopologyNodeData>>; payload?: Record<string, unknown>; [key: string]: unknown }): RealtimeTopologyMessage;

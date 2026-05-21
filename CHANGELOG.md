@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added Agent Bridge context helpers for visible topology extraction, selected graph context, redaction, Markdown serialization, and clipboard copy.
+- Added graph selection APIs for node/edge multi-select, area selection mode, area edge hit testing, visible-range select, visible-range invert, criteria-based selection, and selection change events.
+
 ## 0.1.0
 
 - Added the standalone DOM/SVG topology framework entry at `src/framework/index.js`.
