@@ -755,6 +755,9 @@ export function getNodeBaseSize(node) {
   if (node.type === "planNode") return { width: 600, height: node.data?.summary ? 118 : 86 };
   if (node.type === "cardLayerNode") return { width: 220, height: node.data?.descriptions?.length ? 116 : 86 };
   if (node.type === "componentNode") return { width: 220, height: node.data?.summary ? 104 : 76 };
+  if (node.type === "agentRunNode") return { width: 230, height: node.data?.metric ? 92 : 76 };
+  if (node.type === "agentStepNode") return { width: 250, height: node.data?.summary ? 104 : 78 };
+  if (["toolCallNode", "mcpServerNode", "skillNode", "artifactNode", "contextNode"].includes(node.type)) return { width: 210, height: node.data?.metric ? 90 : 72 };
   if (node.type === "operatorNode" || node.type === "inputSourceNode" || node.type === "sinkNode") return { width: 190, height: 74 };
   if (node.data?.isParent || node.type === "labeledGroupNode" || node.type === "groupNodeWithHandles") return { width: 280, height: 140 };
   return { width: 230, height: node.data?.metric ? 90 : 76 };

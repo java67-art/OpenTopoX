@@ -824,7 +824,98 @@ await graph.copyContext({
 | `oneHop` | 在内部边基础上补齐一跳上下游 |
 | `visible` | 使用当前可见视图 |
 
-## 16. AgentLoop 和 Copilot 图
+## 16. Agentic Topology Observability
+
+Agentic Topology Observability 用于实时显示 Agent 自身活动，以及在 AI Chat 富文本中嵌入关键拓扑块。框架只传递轻量事件和引用，不在拓扑链路中传输完整 prompt、response、日志或 Agent context 正文。
+
+### Agent 执行活动实时可视化
+
+```js
+import {
+  createAgentActivityAdapter,
+  createTopologyUpdateScheduler,
+  NewTopoGraph,
+} from "./src/framework/index.js";
+
+const topo = new NewTopoGraph({
+  container,
+  config: {
+    type: "agentTrace",
+    nodeDraggable: false,
+    minimap: true,
+  },
+});
+
+const adapter = createAgentActivityAdapter({ source: "my-agent" });
+const scheduler = createTopologyUpdateScheduler({ graph: topo });
+
+function ingestAgentEvent(event) {
+  const result = adapter.ingest(event);
+  if (result.valid) scheduler.enqueueGraphPatch(result.patch);
+}
+
+ingestAgentEvent({
+  type: "agent.run.started",
+  runId: "run-20260521",
+  name: "Fix topology issue",
+});
+
+ingestAgentEvent({
+  type: "agent.tool.started",
+  runId: "run-20260521",
+  stepId: "inspect",
+  targetId: "exec-1",
+  name: "exec_command",
+});
+```
+
+事件里只放轻量字段：
+
+```js
+{
+  type: "agent.context.used",
+  runId: "run-20260521",
+  stepId: "inspect",
+  targetId: "ctx-prod-topology",
+  name: "Selected topology context",
+  contextRef: {
+    id: "ctx-prod-topology",
+    summary: "12 nodes, 18 edges",
+    nodeCount: 12,
+    edgeCount: 18,
+    truncated: false,
+  },
+}
+```
+
+`contextRef` 只表示“用过哪个 context”。完整 context 内容由使用者根据 `contextRef.id` 按需加载。
+
+### AI Chat 富文本拓扑块
+
+```js
+import {
+  createChatTopologyBlockPayload,
+  renderAgentTopologyBlock,
+} from "./src/framework/index.js";
+
+const payload = createChatTopologyBlockPayload({
+  kind: "activity-trace",
+  title: "Agent activity",
+  summary: "关键执行过程",
+  events: agentEvents,
+  view: {
+    compact: true,
+    readonly: true,
+    maxHeight: 220,
+  },
+});
+
+renderAgentTopologyBlock(messageElement, payload);
+```
+
+Chat block 默认只读、紧凑、固定高度。节点点击只派发 `topo:chat-topology-node`，宿主应用决定是否打开详情或按 ID 懒加载正文。
+
+## 17. AgentLoop 和 Copilot 图
 
 AgentLoop 图支持边上插入算子、删除算子和专用节点类型。
 
@@ -860,7 +951,7 @@ const topo = new AgentLoopTopoGraph({
 graph.setGraphType("agentloop");
 ```
 
-## 17. 预设图入口
+## 18. 预设图入口
 
 需要按常见图类型快速创建实例时，可以使用轻量入口：
 
@@ -903,7 +994,7 @@ const topo = createTopologyGraph({
 | `map` / `spatial` | `SpatialTopologyGraph` |
 | `flow` | `FlowTopologyGraph` |
 
-## 18. 事件
+## 19. 事件
 
 框架会在容器上派发 DOM `CustomEvent`：
 
@@ -924,6 +1015,8 @@ const topo = createTopologyGraph({
 | `topo:agentloop-delete` | AgentLoop 删除节点 |
 | `topo:context-menu` | 右键菜单打开 |
 | `topo:context-menu-action` | 右键菜单动作触发 |
+| `topo:chat-topology-node` | Chat 拓扑块节点点击 |
+| `topo:chat-topology-edge` | Chat 拓扑块边点击 |
 | `topo:legend-change` | 图例筛选变化 |
 
 示例：
