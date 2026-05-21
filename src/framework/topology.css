@@ -305,7 +305,14 @@
 .topo-node.inputSourceNode,
 .topo-node.sinkNode,
 .topo-node.flowNode,
-.topo-node.flowLayerNode {
+.topo-node.flowLayerNode,
+.topo-node.agentRunNode,
+.topo-node.agentStepNode,
+.topo-node.toolCallNode,
+.topo-node.mcpServerNode,
+.topo-node.skillNode,
+.topo-node.artifactNode,
+.topo-node.contextNode {
   padding: 10px 12px;
   border-left-width: 1px;
 }
@@ -315,7 +322,14 @@
 .topo-node.planNode::before,
 .topo-node.operatorNode::before,
 .topo-node.inputSourceNode::before,
-.topo-node.sinkNode::before {
+.topo-node.sinkNode::before,
+.topo-node.agentRunNode::before,
+.topo-node.agentStepNode::before,
+.topo-node.toolCallNode::before,
+.topo-node.mcpServerNode::before,
+.topo-node.skillNode::before,
+.topo-node.artifactNode::before,
+.topo-node.contextNode::before {
   content: "";
   position: absolute;
   inset: 0 0 auto;
@@ -387,6 +401,20 @@
 
 .topo-node.sinkNode {
   background: #fbfdff;
+}
+
+.topo-node.agentRunNode,
+.topo-node.agentStepNode,
+.topo-node.toolCallNode,
+.topo-node.mcpServerNode,
+.topo-node.skillNode,
+.topo-node.artifactNode,
+.topo-node.contextNode {
+  border-radius: 7px;
+}
+
+.topo-node.contextNode {
+  border-style: dashed;
 }
 
 .topo-node.planNode .node-title {
@@ -519,6 +547,34 @@
   border-top-color: color-mix(in srgb, var(--critical, var(--topo-critical)) 52%, #ffffff);
 }
 
+.topo-node.status-running {
+  border-top-color: color-mix(in srgb, var(--primary, var(--topo-primary)) 56%, #ffffff);
+}
+
+.topo-node.status-running::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border: 1px solid color-mix(in srgb, var(--primary, var(--topo-primary)) 32%, transparent);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: topo-running-pulse 1.4s ease-in-out infinite;
+}
+
+.topo-node.status-pending {
+  opacity: 0.72;
+}
+
+@keyframes topo-running-pulse {
+  0%,
+  100% {
+    opacity: 0.18;
+  }
+  50% {
+    opacity: 0.68;
+  }
+}
+
 .node-head {
   display: flex;
   justify-content: space-between;
@@ -596,6 +652,10 @@
 
 .topo-edge-path.status-critical {
   stroke: var(--critical, var(--topo-critical));
+}
+
+.topo-edge-path.status-running {
+  stroke: var(--primary, var(--topo-primary));
 }
 
 .topo-edge-hit {
@@ -1134,4 +1194,48 @@
   flex: 0 0 auto;
   color: var(--muted, var(--topo-muted));
   font-weight: 700;
+}
+
+.topo-chat-topology-block {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(71, 85, 105, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.topo-chat-topology-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #eef2f6;
+  color: var(--text, var(--topo-text));
+  font-size: 12px;
+}
+
+.topo-chat-topology-header strong,
+.topo-chat-topology-header span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topo-chat-topology-header span {
+  color: var(--muted, var(--topo-muted));
+}
+
+.topo-chat-topology-graph {
+  width: 100%;
+  min-height: 120px;
+  background: #f8fafc;
+}
+
+.topo-chat-topology-graph .new-topo-graph {
+  border: 0;
+  border-radius: 0;
 }

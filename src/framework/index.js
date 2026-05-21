@@ -60,6 +60,33 @@ export {
   serializeTopologyContext,
 } from "./TopologyContextBridge.js";
 export {
+  AGENT_ACTIVITY_EVENT_SCHEMA,
+  AGENT_ACTIVITY_EVENT_TYPES,
+  AGENT_ACTIVITY_KINDS,
+  AGENT_ACTIVITY_STATUSES,
+  createAgentActivityEvent,
+  inferActivityKind,
+  inferActivityStatus,
+  normalizeAgentActivityEvent,
+  sanitizeActivityMeta,
+  validateAgentActivityEvent,
+} from "./AgentActivityProtocol.js";
+export {
+  AGENT_ACTIVITY_EDGE_TYPES,
+  AGENT_ACTIVITY_NODE_TYPES,
+  AgentActivityAdapter,
+  buildAgentActivityTopology,
+  createAgentActivityAdapter,
+  createAgentActivityTopologyPatch,
+} from "./AgentActivityAdapter.js";
+export {
+  CHAT_TOPOLOGY_BLOCK_KINDS,
+  CHAT_TOPOLOGY_BLOCK_SCHEMA,
+  createChatTopologyBlockPayload,
+  renderAgentTopologyBlock,
+  validateChatTopologyBlockPayload,
+} from "./AgentTopologyRenderer.js";
+export {
   DEFAULT_EXPAND_LIMIT,
   DEFAULT_MAX_RENDER_NODES,
   buildTopologyDetailModel,

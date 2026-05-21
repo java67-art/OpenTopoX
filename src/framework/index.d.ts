@@ -1,4 +1,4 @@
-export type TopologyStatus = "ok" | "warn" | "critical" | (string & {});
+export type TopologyStatus = "pending" | "running" | "ok" | "warn" | "critical" | (string & {});
 export type TopologyDirection = "upstream" | "downstream" | "both";
 export type TopologyContextScope = "visible" | "selected" | "neighborhood" | "custom";
 export type TopologyContextIncludeMode = "explicit" | "connectedEdges" | "oneHop" | "visible";
@@ -7,6 +7,25 @@ export type TopologySelectionKind = "node" | "edge";
 export type RealtimeTopologyMessageType = "snapshot" | "nodePatch" | "edgePatch" | "topologyPatch";
 export type TopologyDataTransport = "manual" | "websocket" | "sse" | "polling";
 export type TopologyConnectionStatus = "idle" | "connecting" | "live" | "reconnecting" | "stale" | "offline";
+export type AgentActivityKind = "run" | "step" | "tool" | "mcp" | "skill" | "artifact" | "context";
+export type AgentActivityStatus = "pending" | "running" | "ok" | "warn" | "critical";
+export type AgentActivityEventType =
+  | "agent.run.started"
+  | "agent.run.completed"
+  | "agent.run.failed"
+  | "agent.step.started"
+  | "agent.step.completed"
+  | "agent.step.failed"
+  | "agent.tool.started"
+  | "agent.tool.completed"
+  | "agent.tool.failed"
+  | "agent.mcp.requested"
+  | "agent.mcp.completed"
+  | "agent.mcp.failed"
+  | "agent.skill.used"
+  | "agent.artifact.created"
+  | "agent.context.used";
+export type ChatTopologyBlockKind = "topology" | "activity-trace";
 
 export interface TopologyPoint {
   x: number;
@@ -182,6 +201,95 @@ export interface CopyTopologyContextResult {
   text: string;
   context: TopologyContextEnvelope;
   error?: unknown;
+}
+
+export interface AgentActivityReference {
+  id?: string;
+  schema?: string;
+  type?: string;
+  name?: string;
+  title?: string;
+  summary?: string;
+  source?: string;
+  url?: string;
+  nodeCount?: number;
+  edgeCount?: number;
+  size?: number;
+  durationMs?: number;
+  truncated?: boolean;
+  [key: string]: unknown;
+}
+
+export interface AgentActivityEvent {
+  schema: "opentopox.agent-event.v1";
+  id: string;
+  type: AgentActivityEventType;
+  kind: AgentActivityKind;
+  runId: string;
+  stepId?: string;
+  parentId?: string;
+  targetId?: string;
+  name?: string;
+  summary?: string;
+  inputSummary?: string;
+  outputSummary?: string;
+  status: AgentActivityStatus;
+  createdAt: string;
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
+  error?: { message: string; code?: string };
+  contextRef?: AgentActivityReference;
+  artifactRef?: AgentActivityReference;
+  toolRef?: AgentActivityReference;
+  mcpRef?: AgentActivityReference;
+  skillRef?: AgentActivityReference;
+  meta?: Record<string, unknown>;
+}
+
+export interface AgentActivityValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  event: AgentActivityEvent;
+}
+
+export interface AgentActivityIngestResult {
+  valid: boolean;
+  validation: AgentActivityValidationResult;
+  event: AgentActivityEvent;
+  patch: TopologyGraphPatch & { addedNodes: TopologyNode[]; updatedNodes: TopologyNode[]; addedEdges: TopologyEdge[]; updatedEdges: TopologyEdge[]; removedNodeIds: string[]; removedEdgeIds: string[] };
+  message?: RealtimeTopologyMessage;
+  graph?: TopologyGraphData;
+}
+
+export interface ChatTopologyBlockPayload {
+  schema: "opentopox.chat-topology-block.v1";
+  kind: ChatTopologyBlockKind;
+  title?: string;
+  summary?: string;
+  runId?: string;
+  graph: TopologyGraphData;
+  events?: AgentActivityEvent[];
+  activityRefs?: string[];
+  view: {
+    compact: boolean;
+    readonly: boolean;
+    maxHeight: number;
+    maxNodes: number;
+    maxEdges: number;
+    theme?: string;
+    hoverHighlight?: boolean;
+    animate?: boolean;
+  };
+  meta?: Record<string, unknown>;
+}
+
+export interface ChatTopologyBlockValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  payload: ChatTopologyBlockPayload;
 }
 
 export interface TopologyPatchItem<TData extends Record<string, unknown> = Record<string, unknown>> {
@@ -463,6 +571,17 @@ export declare class TopologyUpdateScheduler {
   destroy(): void;
 }
 
+export declare class AgentActivityAdapter {
+  constructor(options?: { source?: string; version?: string | number; failureBubbleStatus?: AgentActivityStatus });
+  subscribe(listener: (event: Record<string, unknown>) => void): () => void;
+  ingest(input: Partial<AgentActivityEvent> | string, options?: Record<string, unknown>): AgentActivityIngestResult;
+  ingestMany(events?: Array<Partial<AgentActivityEvent> | string>, options?: Record<string, unknown>): { results: AgentActivityIngestResult[]; graph: TopologyGraphData };
+  createPatchFromEvent(event: Partial<AgentActivityEvent>): TopologyGraphPatch;
+  createRealtimePatchMessage(patch: TopologyGraphPatch, event?: Partial<AgentActivityEvent>): RealtimeTopologyMessage;
+  getGraphData(): TopologyGraphData;
+  reset(): void;
+}
+
 export declare const REALTIME_TOPOLOGY_PROTOCOL: string;
 export declare const REALTIME_TOPOLOGY_MESSAGE_TYPES: Record<string, RealtimeTopologyMessageType>;
 export declare const REALTIME_TOPOLOGY_PATCH_OPERATIONS: Record<string, string>;
@@ -473,10 +592,30 @@ export declare const TOPOLOGY_GRAPH_STORE_EVENTS: Record<string, string>;
 export declare const TOPOLOGY_GRAPH_STORE_STATUS: Record<string, TopologyConnectionStatus>;
 export declare const TOPOLOGY_UPDATE_SCHEDULER_EVENTS: Record<string, string>;
 export declare const TOPOLOGY_CONTEXT_SCHEMA: "opentopox.agent-context.v1";
+export declare const AGENT_ACTIVITY_EVENT_SCHEMA: "opentopox.agent-event.v1";
+export declare const AGENT_ACTIVITY_EVENT_TYPES: Record<string, AgentActivityEventType>;
+export declare const AGENT_ACTIVITY_KINDS: Record<string, AgentActivityKind>;
+export declare const AGENT_ACTIVITY_STATUSES: Record<string, AgentActivityStatus>;
+export declare const AGENT_ACTIVITY_NODE_TYPES: Record<string, string>;
+export declare const AGENT_ACTIVITY_EDGE_TYPES: Record<string, string>;
+export declare const CHAT_TOPOLOGY_BLOCK_SCHEMA: "opentopox.chat-topology-block.v1";
+export declare const CHAT_TOPOLOGY_BLOCK_KINDS: Record<string, ChatTopologyBlockKind>;
 
 export declare function createTopologyDataAdapter(options?: Record<string, unknown>): TopologyDataAdapter;
 export declare function createTopologyGraphStore(options?: ConstructorParameters<typeof TopologyGraphStore>[0]): TopologyGraphStore;
 export declare function createTopologyUpdateScheduler(options?: ConstructorParameters<typeof TopologyUpdateScheduler>[0]): TopologyUpdateScheduler;
+export declare function createAgentActivityEvent(input?: Partial<AgentActivityEvent> | string): AgentActivityEvent;
+export declare function normalizeAgentActivityEvent(input?: Partial<AgentActivityEvent> | string): AgentActivityEvent;
+export declare function validateAgentActivityEvent(input?: Partial<AgentActivityEvent> | string, options?: Record<string, unknown>): AgentActivityValidationResult;
+export declare function inferActivityKind(type?: string): AgentActivityKind | "";
+export declare function inferActivityStatus(type?: string): AgentActivityStatus;
+export declare function sanitizeActivityMeta(meta?: Record<string, unknown>): Record<string, unknown>;
+export declare function createAgentActivityAdapter(options?: ConstructorParameters<typeof AgentActivityAdapter>[0]): AgentActivityAdapter;
+export declare function buildAgentActivityTopology(events?: Array<Partial<AgentActivityEvent> | string>, options?: ConstructorParameters<typeof AgentActivityAdapter>[0]): TopologyGraphData;
+export declare function createAgentActivityTopologyPatch(event?: Partial<AgentActivityEvent> | string, options?: ConstructorParameters<typeof AgentActivityAdapter>[0]): TopologyGraphPatch;
+export declare function createChatTopologyBlockPayload(input?: Partial<ChatTopologyBlockPayload> | string): ChatTopologyBlockPayload;
+export declare function validateChatTopologyBlockPayload(input?: Partial<ChatTopologyBlockPayload> | string, options?: Record<string, unknown>): ChatTopologyBlockValidationResult;
+export declare function renderAgentTopologyBlock(container: HTMLElement, payload: Partial<ChatTopologyBlockPayload> | string, options?: Record<string, unknown>): { payload: ChatTopologyBlockPayload; validation: ChatTopologyBlockValidationResult; container: HTMLElement; graph: NewTopoGraph; ready: Promise<unknown>; destroy(): void; update(nextInput: Partial<ChatTopologyBlockPayload> | string): Promise<unknown> };
 export declare function createTopologyContext(options?: { nodes?: TopologyNode[]; edges?: TopologyEdge[]; selection?: TopologySelection; visibleRect?: { x: number; y: number; width: number; height: number }; viewport?: TopologyViewport; source?: Record<string, unknown>; options?: TopologyContextOptions }): TopologyContextEnvelope;
 export declare function resolveContextGraph(options?: { nodes?: TopologyNode[]; edges?: TopologyEdge[]; selection?: TopologySelection; visibleRect?: { x: number; y: number; width: number; height: number }; scope?: TopologyContextScope; includeMode?: TopologyContextIncludeMode; degree?: number; direction?: TopologyDirection }): TopologyGraphData;
 export declare function getVisibleGraphData(options?: { nodes?: TopologyNode[]; edges?: TopologyEdge[]; visibleRect?: { x: number; y: number; width: number; height: number } }): TopologyGraphData;

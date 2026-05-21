@@ -345,7 +345,7 @@ export function createTopologyGraphStore(options = {}) {
   return new TopologyGraphStore(options);
 }
 
-const VALID_TOPOLOGY_STATUSES = new Set(["ok", "warn", "critical"]);
+const VALID_TOPOLOGY_STATUSES = new Set(["pending", "running", "ok", "warn", "critical"]);
 const DEFAULT_ALLOWED_NODE_TYPES = new Set([
   "cardNode",
   "cardLayerNode",
@@ -358,6 +358,13 @@ const DEFAULT_ALLOWED_NODE_TYPES = new Set([
   "operatorNode",
   "planNode",
   "sinkNode",
+  "agentRunNode",
+  "agentStepNode",
+  "toolCallNode",
+  "mcpServerNode",
+  "skillNode",
+  "artifactNode",
+  "contextNode",
 ]);
 
 export function validateGraphData(nodes = [], edges = [], {

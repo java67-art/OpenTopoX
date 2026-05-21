@@ -2572,7 +2572,7 @@ function renderNodeContent(node, type = "cardNode") {
 function renderDefaultNodeContent(node, type = "cardNode") {
   if (type === "labeledGroupNode" || type === "groupNodeWithHandles") return renderGroupNodeContent(node, type);
   if (type === "cardLayerNode") return renderCardLayerNodeContent(node);
-  if (["componentNode", "planNode", "operatorNode", "inputSourceNode", "sinkNode", "flowNode", "flowLayerNode"].includes(type)) {
+  if (["componentNode", "planNode", "operatorNode", "inputSourceNode", "sinkNode", "flowNode", "flowLayerNode", "agentRunNode", "agentStepNode", "toolCallNode", "mcpServerNode", "skillNode", "artifactNode", "contextNode"].includes(type)) {
     return renderRichNodeContent(node, type);
   }
 
