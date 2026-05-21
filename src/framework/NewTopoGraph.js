@@ -40,7 +40,8 @@ export class NewTopoGraph {
     this.viewport = { x: 0, y: 0, zoom: 1 };
     this.selected = null;
     this.selection = { nodes: [], edges: [], primary: null };
-    this.selectionMode = config.selectionMode || "default";
+    this.selectionEnabled = Boolean(config.enableSelection ?? config.selectionEnabled ?? false);
+    this.selectionMode = this.selectionEnabled && config.selectionMode === "area" ? "area" : "default";
     this.areaSelection = null;
     this.animate = config.animate ?? true;
     this.userAnimate = this.animate;
@@ -155,6 +156,8 @@ export class NewTopoGraph {
       selectVisible: (options) => this.selectVisible(options),
       invertSelection: (options) => this.invertSelection(options),
       selectByCriteria: (criteria, options) => this.selectByCriteria(criteria, options),
+      setSelectionEnabled: (enabled) => this.setSelectionEnabled(enabled),
+      isSelectionEnabled: () => this.isSelectionEnabled(),
       setSelectionMode: (mode) => this.setSelectionMode(mode),
       getSelectionMode: () => this.selectionMode,
       getVisibleGraphData: (options) => this.getVisibleGraphData(options),
@@ -318,6 +321,7 @@ export class NewTopoGraph {
         fullscreen: true,
         grid: this.gridVisible,
         minimap: this.minimapEnabled,
+        selection: this.selectionEnabled,
       },
     };
   }
@@ -1006,7 +1010,11 @@ export class NewTopoGraph {
   selectNode(id, { emit = true } = {}) {
     const node = this.nodes.find((item) => item.id === id);
     if (!node) return null;
-    this.setSelection({ nodes: [id], edges: [], primary: { type: "node", id } }, { emit });
+    if (this.selectionEnabled) {
+      this.setSelection({ nodes: [id], edges: [], primary: { type: "node", id } }, { emit });
+    } else {
+      this.setSelectedItem({ type: "node", id });
+    }
     if (emit) this.handleNodeClick?.(node);
     return node;
   }
@@ -1045,6 +1053,12 @@ export class NewTopoGraph {
 
   clearSelection({ emit = true } = {}) {
     return this.setSelection({ nodes: [], edges: [], primary: null }, { emit });
+  }
+
+  setSelectedItem(item = null) {
+    this.selected = item ? { type: item.type, id: item.id } : null;
+    this.renderSelection();
+    return this.selected ? { ...this.selected } : null;
   }
 
   selectArea(rect, { append = false, emit = true, includeEdges = true, edgeMode = "intersect" } = {}) {
@@ -1140,7 +1154,7 @@ export class NewTopoGraph {
 
   setSelectionMode(mode = "default") {
     const previous = this.selectionMode;
-    this.selectionMode = mode === "area" ? "area" : "default";
+    this.selectionMode = this.selectionEnabled && mode === "area" ? "area" : "default";
     this.root?.classList.toggle("is-selection-mode-area", this.selectionMode === "area");
     if (previous !== this.selectionMode) {
       this.container.dispatchEvent(new CustomEvent("topo:selection-mode-change", {
@@ -1149,6 +1163,29 @@ export class NewTopoGraph {
       }));
     }
     return this.selectionMode;
+  }
+
+  setSelectionEnabled(enabled) {
+    const next = Boolean(enabled);
+    if (this.selectionEnabled === next) return this.selectionEnabled;
+    const previous = this.selectionEnabled;
+    this.selectionEnabled = next;
+    if (!next) {
+      this.setSelectionMode("default");
+      this.clearSelection();
+    } else {
+      this.renderSelection();
+    }
+    this.root?.classList.toggle("is-selection-enabled", this.selectionEnabled);
+    this.container.dispatchEvent(new CustomEvent("topo:selection-enabled-change", {
+      detail: { enabled: this.selectionEnabled, previous },
+      bubbles: true,
+    }));
+    return this.selectionEnabled;
+  }
+
+  isSelectionEnabled() {
+    return this.selectionEnabled;
   }
 
   normalizeSelection(selection = {}) {
@@ -1168,6 +1205,12 @@ export class NewTopoGraph {
   }
 
   selectGraphItem(type, id, event, item) {
+    if (!this.selectionEnabled) {
+      this.setSelectedItem({ type, id });
+      if (type === "node") this.handleNodeClick?.(item);
+      if (type === "edge") this.handleEdgeClick?.(item);
+      return this.getSelection();
+    }
     const additive = isAdditiveSelectionEvent(event);
     const selection = additive
       ? this.toggleSelectionItem({ type, id })
@@ -1451,6 +1494,7 @@ export class NewTopoGraph {
     this.root.append(this.viewportEl, this.selectionMarquee, this.minimap, this.debugPanel);
     this.root.classList.toggle("has-minimap", this.minimapEnabled);
     this.root.classList.toggle("has-debug-panel", this.debugPanelEnabled);
+    this.root.classList.toggle("is-selection-enabled", this.selectionEnabled);
     this.root.classList.toggle("is-selection-mode-area", this.selectionMode === "area");
     this.container.append(this.root);
     this.bindMinimapEvents();
@@ -1540,7 +1584,7 @@ export class NewTopoGraph {
   }
 
   shouldStartAreaSelection(event) {
-    return this.selectionMode === "area" || event.shiftKey;
+    return this.selectionEnabled && (this.selectionMode === "area" || event.shiftKey);
   }
 
   updateSelectionMarquee(start, event) {
@@ -1598,7 +1642,7 @@ export class NewTopoGraph {
       this.root?.classList.remove("is-area-selecting");
       return;
     }
-    if (this.selection.nodes.length || this.selection.edges.length) this.clearSelection();
+    if (this.selectionEnabled && (this.selection.nodes.length || this.selection.edges.length)) this.clearSelection();
   }
 
   bindMinimapEvents() {
@@ -2152,7 +2196,8 @@ export class NewTopoGraph {
         if (this.suppressNodeClick === node.id) this.suppressNodeClick = null;
       }, 0);
       this.renderEdges();
-      this.setSelection({ nodes: [node.id], edges: [], primary: { type: "node", id: node.id } });
+      if (this.selectionEnabled) this.setSelection({ nodes: [node.id], edges: [], primary: { type: "node", id: node.id } });
+      else this.setSelectedItem({ type: "node", id: node.id });
       this.handleNodeClick?.(node);
       this.container.dispatchEvent(new CustomEvent("topo:node-drag", {
         detail: { node: { ...cloneGraphItem(node), positionAbsolute: this.getNodeAbsolutePosition(node) } },
@@ -2351,18 +2396,22 @@ export class NewTopoGraph {
     this.root.querySelectorAll(".is-selected, .is-multi-selected").forEach((item) => {
       item.classList.remove("is-selected", "is-multi-selected");
     });
-    const selection = this.selection || { nodes: [], edges: [] };
-    for (const id of selection.nodes || []) {
-      this.root.querySelector(`.topo-node[data-node-id="${cssEscape(id)}"]`)?.classList.add("is-multi-selected");
-    }
-    for (const id of selection.edges || []) {
-      this.root.querySelector(`.topo-edge[data-edge-id="${cssEscape(id)}"]`)?.classList.add("is-multi-selected");
+    if (this.selectionEnabled) {
+      const selection = this.selection || { nodes: [], edges: [] };
+      for (const id of selection.nodes || []) {
+        this.root.querySelector(`.topo-node[data-node-id="${cssEscape(id)}"]`)?.classList.add("is-multi-selected");
+      }
+      for (const id of selection.edges || []) {
+        this.root.querySelector(`.topo-edge[data-edge-id="${cssEscape(id)}"]`)?.classList.add("is-multi-selected");
+      }
     }
     if (!this.selected) return;
     const selector = this.selected.type === "node"
       ? `.topo-node[data-node-id="${cssEscape(this.selected.id)}"]`
       : `.topo-edge[data-edge-id="${cssEscape(this.selected.id)}"]`;
-    this.root.querySelector(selector)?.classList.add("is-selected", "is-multi-selected");
+    const selectedElement = this.root.querySelector(selector);
+    selectedElement?.classList.add("is-selected");
+    if (this.selectionEnabled) selectedElement?.classList.add("is-multi-selected");
   }
 
   applyViewport() {

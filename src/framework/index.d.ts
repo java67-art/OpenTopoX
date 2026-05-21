@@ -292,6 +292,8 @@ export interface GraphApi {
   selectVisible(options?: { append?: boolean; emit?: boolean; includeEdges?: boolean }): TopologySelection;
   invertSelection(options?: { scope?: "visible" | "all"; emit?: boolean; includeEdges?: boolean }): TopologySelection;
   selectByCriteria(criteria?: TopologySelectionCriteria, options?: { append?: boolean; emit?: boolean; visibleOnly?: boolean; includeEdges?: boolean }): TopologySelection;
+  setSelectionEnabled(enabled: boolean): boolean;
+  isSelectionEnabled(): boolean;
   setSelectionMode(mode: TopologySelectionMode): TopologySelectionMode;
   getSelectionMode(): TopologySelectionMode;
   getVisibleGraphData(options?: { visibleRect?: { x: number; y: number; width: number; height: number } }): TopologyGraphData;
@@ -323,6 +325,9 @@ export interface NewTopoGraphOptions {
     type?: string;
     graphType?: string;
     theme?: string;
+    enableSelection?: boolean;
+    selectionEnabled?: boolean;
+    selectionMode?: TopologySelectionMode;
     nodeDraggable?: boolean;
     hoverHighlight?: boolean;
     hoverHighlightDegree?: number;
@@ -365,6 +370,8 @@ export declare class NewTopoGraph {
   selectVisible(options?: { append?: boolean; emit?: boolean; includeEdges?: boolean }): TopologySelection;
   invertSelection(options?: { scope?: "visible" | "all"; emit?: boolean; includeEdges?: boolean }): TopologySelection;
   selectByCriteria(criteria?: TopologySelectionCriteria, options?: { append?: boolean; emit?: boolean; visibleOnly?: boolean; includeEdges?: boolean }): TopologySelection;
+  setSelectionEnabled(enabled: boolean): boolean;
+  isSelectionEnabled(): boolean;
   extractContext(options?: TopologyContextOptions): TopologyContextEnvelope | string | SerializedTopologyContext;
   copyContext(options?: TopologyContextOptions & { text?: string }): Promise<CopyTopologyContextResult>;
   destroy(): void;

@@ -157,6 +157,7 @@ export function resolveGraphTarget(event, graph) {
 
 function syncContextSelection(context, graph, event) {
   if (!graph?.setSelection || (context.type !== "node" && context.type !== "edge")) return;
+  if (graph.isSelectionEnabled && !graph.isSelectionEnabled()) return;
   const selection = graph.getSelection?.() || { nodes: [], edges: [], primary: null };
   const selected = context.type === "node"
     ? selection.nodes?.includes(context.id)

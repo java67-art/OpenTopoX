@@ -745,7 +745,7 @@ const mergedEdges = mergeParallelEdges(edges, {
 
 ## 15. Agent Bridge
 
-Agent Bridge 用于把用户在拓扑图中看到或选择的对象提取为 Agent context。默认交互：
+Agent Bridge 用于把用户在拓扑图中看到或选择的对象提取为 Agent context。交互选择默认不启用；需要在 `NewTopoGraph` 中显式设置 `enableSelection: true`，再按需开启工具栏或右键菜单入口。启用后的交互：
 
 - 普通点击节点或边：单选。
 - `Cmd/Ctrl + Click`：追加或取消选择，Control-click 触发右键菜单时也会保留追加选择语义。
@@ -760,6 +760,7 @@ const topo = new NewTopoGraph({
   container,
   config: {
     minimap: true,
+    enableSelection: true,
     selectionMode: "default",
   },
 });

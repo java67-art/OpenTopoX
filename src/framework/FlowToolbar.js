@@ -38,6 +38,7 @@ export class FlowToolbar {
     this.handleSelection = () => this.syncSelectionMode();
     this.handleClick = (event) => this.handleToolbarClick(event);
     this.graphEventRoot = null;
+    if (this.enableAreaSelection) this.getGraphApi()?.setSelectionEnabled?.(true);
     this.render();
     this.bindGraphEvents();
   }

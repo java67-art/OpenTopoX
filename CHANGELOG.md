@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Added Agent Bridge context helpers for visible topology extraction, selected graph context, redaction, Markdown serialization, and clipboard copy.
+- Agent Bridge interactive selection is opt-in via `config.enableSelection`; default graph interactions keep the existing single-select behavior.
 - Added graph selection APIs for node/edge multi-select, area selection mode, area edge hit testing, visible-range select, visible-range invert, criteria-based selection, and selection change events.
 
 ## 0.1.0
