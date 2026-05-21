@@ -1,4 +1,10 @@
 import { TopoLayout, getNodeBaseSize, getNodeSize } from "./TopoLayout.js";
+import {
+  createTopologyContext,
+  formatTopologyContextAsMarkdown,
+  getVisibleGraphData as getVisibleTopologyGraphData,
+  serializeTopologyContext,
+} from "./TopologyContextBridge.js";
 import { getEdgeShape, getNodeShape, registerEdgeShape, registerNodeShape } from "./Registry.js";
 import { validateGraphData } from "./TopologyGraphStore.js";
 
@@ -33,6 +39,9 @@ export class NewTopoGraph {
     this.nodeType = "cardNode";
     this.viewport = { x: 0, y: 0, zoom: 1 };
     this.selected = null;
+    this.selection = { nodes: [], edges: [], primary: null };
+    this.selectionMode = config.selectionMode || "default";
+    this.areaSelection = null;
     this.animate = config.animate ?? true;
     this.userAnimate = this.animate;
     this.performanceMode = false;
@@ -82,6 +91,7 @@ export class NewTopoGraph {
     this.edgeMarkerId = `topo-arrow-${this.instanceId}`;
     this.minimapShadowId = `minimap-soft-shadow-${this.instanceId}`;
     this.handleFullscreenChange = () => this.syncFullscreenState();
+    this.handleKeydown = (event) => this.handleGraphKeydown(event);
     this.hoverState = null;
     this.suppressNodeClick = null;
     this.isMinimapDragging = false;
@@ -92,6 +102,7 @@ export class NewTopoGraph {
     this.setTheme(config.theme || "neutral");
     this.bindCanvasEvents();
     document.addEventListener("fullscreenchange", this.handleFullscreenChange);
+    document.addEventListener("keydown", this.handleKeydown);
     onLoad?.();
   }
 
@@ -136,6 +147,19 @@ export class NewTopoGraph {
       getContainer: () => this.container,
       getRootElement: () => this.root,
       selectNode: (id, options) => this.selectNode(id, options),
+      getSelection: () => this.getSelection(),
+      setSelection: (selection, options) => this.setSelection(selection, options),
+      toggleSelectionItem: (item, options) => this.toggleSelectionItem(item, options),
+      clearSelection: (options) => this.clearSelection(options),
+      selectArea: (rect, options) => this.selectArea(rect, options),
+      selectVisible: (options) => this.selectVisible(options),
+      invertSelection: (options) => this.invertSelection(options),
+      selectByCriteria: (criteria, options) => this.selectByCriteria(criteria, options),
+      setSelectionMode: (mode) => this.setSelectionMode(mode),
+      getSelectionMode: () => this.selectionMode,
+      getVisibleGraphData: (options) => this.getVisibleGraphData(options),
+      extractContext: (options) => this.extractContext(options),
+      copyContext: (options) => this.copyContext(options),
       updateNode: (id, patch) => this.updateNode(id, patch),
       updateNodeData: (id, patch) => this.updateNodeData(id, patch),
       updateEdge: (id, patch) => this.updateEdge(id, patch),
@@ -397,6 +421,7 @@ export class NewTopoGraph {
       markerEnd: "arrow",
       ...edge,
     }));
+    this.pruneSelection({ emit: false });
     this.syncAutoPerformanceMode({ nodeCount: this.nodes.length, edgeCount: this.edges.length });
     this.pendingNodeAnimation = this.createNodeAnimation(previousPositions, { centerNodeId, disableAnimate });
 
@@ -501,6 +526,7 @@ export class NewTopoGraph {
 
     this.nodes = nodes;
     this.edges = edges;
+    this.pruneSelection({ emit: false });
     this.syncAutoPerformanceMode({ nodeCount: this.nodes.length, edgeCount: this.edges.length });
     this.pendingNodeAnimation = this.createNodeAnimation(previousPositions, { centerNodeId, disableAnimate });
     this.render();
@@ -791,6 +817,7 @@ export class NewTopoGraph {
       markerEnd: "arrow",
       ...edge,
     }));
+    this.pruneSelection({ emit: false });
     if (!options.preserveOrigin) {
       this.originData = {
         nodes: validation.nodes.map((node) => cloneGraphItem(node)),
@@ -979,10 +1006,286 @@ export class NewTopoGraph {
   selectNode(id, { emit = true } = {}) {
     const node = this.nodes.find((item) => item.id === id);
     if (!node) return null;
-    this.selected = { type: "node", id };
-    this.renderSelection();
+    this.setSelection({ nodes: [id], edges: [], primary: { type: "node", id } }, { emit });
     if (emit) this.handleNodeClick?.(node);
     return node;
+  }
+
+  getSelection() {
+    return cloneSelection(this.selection);
+  }
+
+  setSelection(selection = {}, { emit = true, render = true } = {}) {
+    const next = this.normalizeSelection(selection);
+    const previous = this.selection;
+    this.selection = next;
+    this.selected = next.primary ? { ...next.primary } : null;
+    if (render) this.renderSelection();
+    if (emit && !areSelectionsEqual(previous, next)) {
+      this.container.dispatchEvent(new CustomEvent("topo:selection-change", {
+        detail: { selection: this.getSelection(), previous: cloneSelection(previous) },
+        bubbles: true,
+      }));
+    }
+    return this.getSelection();
+  }
+
+  toggleSelectionItem(item = {}, { emit = true } = {}) {
+    if (item.type !== "node" && item.type !== "edge") return this.getSelection();
+    const selection = this.getSelection();
+    const collection = item.type === "node" ? selection.nodes : selection.edges;
+    const index = collection.indexOf(item.id);
+    if (index >= 0) collection.splice(index, 1);
+    else collection.push(item.id);
+    const primary = index >= 0 && selection.primary?.type === item.type && selection.primary?.id === item.id
+      ? resolvePrimarySelection(selection)
+      : { type: item.type, id: item.id };
+    return this.setSelection({ ...selection, primary }, { emit });
+  }
+
+  clearSelection({ emit = true } = {}) {
+    return this.setSelection({ nodes: [], edges: [], primary: null }, { emit });
+  }
+
+  selectArea(rect, { append = false, emit = true, includeEdges = true, edgeMode = "intersect" } = {}) {
+    const normalizedRect = normalizeRect(rect);
+    const selectedNodeIds = this.nodes
+      .filter((node) => doesNodeRectIntersect(node, normalizedRect, (item) => this.getNodeAbsolutePosition(item)))
+      .map((node) => node.id);
+    const selectedEdgeIds = includeEdges
+      ? this.getEdgesIntersectingRect(normalizedRect, selectedNodeIds, { edgeMode })
+      : [];
+    const base = append ? this.getSelection() : { nodes: [], edges: [], primary: null };
+    const nodes = [...new Set([...base.nodes, ...selectedNodeIds])];
+    const edges = [...new Set([...base.edges, ...selectedEdgeIds])];
+    const primary = selectedNodeIds.length
+      ? { type: "node", id: selectedNodeIds[0] }
+      : selectedEdgeIds.length
+        ? { type: "edge", id: selectedEdgeIds[0] }
+        : resolvePrimarySelection({ nodes, edges }) || base.primary;
+    const next = this.setSelection({ nodes, edges, primary }, { emit });
+    this.container.dispatchEvent(new CustomEvent("topo:selection-area-end", {
+      detail: { rect: normalizedRect, selection: next, nodeIds: selectedNodeIds, edgeIds: selectedEdgeIds },
+      bubbles: true,
+    }));
+    return next;
+  }
+
+  selectVisible({ append = false, emit = true, includeEdges = true } = {}) {
+    const visible = this.getVisibleGraphData();
+    const base = append ? this.getSelection() : { nodes: [], edges: [], primary: null };
+    const nodes = [...new Set([...base.nodes, ...visible.nodes.map((node) => node.id)])];
+    const edges = includeEdges
+      ? [...new Set([...base.edges, ...visible.edges.map((edge) => edge.id)])]
+      : base.edges;
+    return this.setSelection({
+      nodes,
+      edges,
+      primary: resolvePrimarySelection({ nodes, edges }),
+    }, { emit });
+  }
+
+  invertSelection({ scope = "visible", emit = true, includeEdges = true } = {}) {
+    const candidates = scope === "all" ? this.getData() : this.getVisibleGraphData();
+    const candidateNodeIds = new Set(candidates.nodes.map((node) => node.id));
+    const candidateEdgeIds = new Set(includeEdges ? candidates.edges.map((edge) => edge.id) : []);
+    const current = this.getSelection();
+    const nodeIds = new Set(current.nodes);
+    const edgeIds = new Set(current.edges);
+
+    for (const id of candidateNodeIds) {
+      if (nodeIds.has(id)) nodeIds.delete(id);
+      else nodeIds.add(id);
+    }
+    for (const id of candidateEdgeIds) {
+      if (edgeIds.has(id)) edgeIds.delete(id);
+      else edgeIds.add(id);
+    }
+    if (scope === "all") {
+      for (const id of current.nodes) if (!candidateNodeIds.has(id)) nodeIds.delete(id);
+      for (const id of current.edges) if (!candidateEdgeIds.has(id)) edgeIds.delete(id);
+    }
+
+    const next = {
+      nodes: [...nodeIds],
+      edges: includeEdges ? [...edgeIds] : current.edges,
+    };
+    return this.setSelection({ ...next, primary: resolvePrimarySelection(next) }, { emit });
+  }
+
+  selectByCriteria(criteria = {}, { append = false, emit = true, visibleOnly = false, includeEdges = true } = {}) {
+    if (!criteria || typeof criteria !== "object") return this.getSelection();
+    const graph = visibleOnly ? this.getVisibleGraphData() : this.getData();
+    const selectedNodeIds = graph.nodes
+      .filter((node) => matchesSelectionCriteria(node, "node", criteria))
+      .map((node) => node.id);
+    const selectedNodeIdSet = new Set(selectedNodeIds);
+    const explicitlySelectedEdgeIds = new Set(graph.edges
+      .filter((edge) => matchesSelectionCriteria(edge, "edge", criteria))
+      .map((edge) => edge.id));
+    const selectedEdgeIds = includeEdges
+      ? graph.edges
+        .filter((edge) => explicitlySelectedEdgeIds.has(edge.id) || (selectedNodeIdSet.has(edge.source) && selectedNodeIdSet.has(edge.target)))
+        .map((edge) => edge.id)
+      : [...explicitlySelectedEdgeIds];
+    const base = append ? this.getSelection() : { nodes: [], edges: [], primary: null };
+    const nodes = [...new Set([...base.nodes, ...selectedNodeIds])];
+    const edges = [...new Set([...base.edges, ...selectedEdgeIds])];
+    return this.setSelection({
+      nodes,
+      edges,
+      primary: resolvePrimarySelection({ nodes, edges }),
+    }, { emit });
+  }
+
+  setSelectionMode(mode = "default") {
+    const previous = this.selectionMode;
+    this.selectionMode = mode === "area" ? "area" : "default";
+    this.root?.classList.toggle("is-selection-mode-area", this.selectionMode === "area");
+    if (previous !== this.selectionMode) {
+      this.container.dispatchEvent(new CustomEvent("topo:selection-mode-change", {
+        detail: { mode: this.selectionMode, previous },
+        bubbles: true,
+      }));
+    }
+    return this.selectionMode;
+  }
+
+  normalizeSelection(selection = {}) {
+    const validNodeIds = new Set(this.nodes.map((node) => node.id));
+    const validEdgeIds = new Set(this.edges.map((edge) => edge.id));
+    const nodes = [...new Set(selection.nodes || [])].filter((id) => validNodeIds.has(id));
+    const edges = [...new Set(selection.edges || [])].filter((id) => validEdgeIds.has(id));
+    let primary = selection.primary || null;
+    if (primary?.type === "node" && !validNodeIds.has(primary.id)) primary = null;
+    if (primary?.type === "edge" && !validEdgeIds.has(primary.id)) primary = null;
+    if (!primary) primary = resolvePrimarySelection({ nodes, edges });
+    return { nodes, edges, primary };
+  }
+
+  pruneSelection({ emit = false } = {}) {
+    return this.setSelection(this.selection, { emit, render: false });
+  }
+
+  selectGraphItem(type, id, event, item) {
+    const additive = isAdditiveSelectionEvent(event);
+    const selection = additive
+      ? this.toggleSelectionItem({ type, id })
+      : this.setSelection({
+        nodes: type === "node" ? [id] : [],
+        edges: type === "edge" ? [id] : [],
+        primary: { type, id },
+      });
+    if (type === "node") this.handleNodeClick?.(item);
+    if (type === "edge") this.handleEdgeClick?.(item);
+    return selection;
+  }
+
+  getEdgesIntersectingRect(rect, selectedNodeIds = [], { edgeMode = "intersect" } = {}) {
+    const selectedNodeIdSet = new Set(selectedNodeIds);
+    return this.edges
+      .filter((edge) => {
+        const source = this.nodes.find((node) => node.id === edge.source);
+        const target = this.nodes.find((node) => node.id === edge.target);
+        if (!source || !target) return false;
+        if (edgeMode === "connected") return selectedNodeIdSet.has(edge.source) && selectedNodeIdSet.has(edge.target);
+        const sourceCenter = this.getNodeCenter(source);
+        const targetCenter = this.getNodeCenter(target);
+        return segmentIntersectsRect(sourceCenter, targetCenter, rect)
+          || (selectedNodeIdSet.has(edge.source) && selectedNodeIdSet.has(edge.target));
+      })
+      .map((edge) => edge.id);
+  }
+
+  getNodeCenter(node) {
+    const position = this.getNodeAbsolutePosition(node);
+    const size = getNodeSize(node);
+    return {
+      x: position.x + size.width / 2,
+      y: position.y + size.height / 2,
+    };
+  }
+
+  getContextNodes() {
+    return this.nodes.map((node) => ({
+      ...cloneGraphItem(node),
+      position: this.getNodeAbsolutePosition(node),
+      measured: getNodeSize(node),
+    }));
+  }
+
+  getVisibleGraphData(options = {}) {
+    return getVisibleTopologyGraphData({
+      nodes: this.getContextNodes(),
+      edges: this.getEdges(),
+      visibleRect: options.visibleRect || this.getVisibleGraphRect(),
+    });
+  }
+
+  extractContext(options = {}) {
+    const contextOptions = this.resolveContextOptions(options);
+    const context = createTopologyContext({
+      nodes: this.getContextNodes(),
+      edges: this.getEdges(),
+      selection: this.getSelection(),
+      visibleRect: this.getVisibleGraphRect(),
+      viewport: { ...this.viewport },
+      source: {
+        graphType: this.graphType,
+        layout: this.layout.options.topoType || "dot",
+      },
+      options: contextOptions,
+    });
+    const result = serializeTopologyContext(context, { format: contextOptions.format || "json" });
+    this.container.dispatchEvent(new CustomEvent("topo:context-extract", {
+      detail: { context, format: contextOptions.format || "json" },
+      bubbles: true,
+    }));
+    return result;
+  }
+
+  async copyContext(options = {}) {
+    const contextOptions = this.resolveContextOptions(options);
+    const context = createTopologyContext({
+      nodes: this.getContextNodes(),
+      edges: this.getEdges(),
+      selection: this.getSelection(),
+      visibleRect: this.getVisibleGraphRect(),
+      viewport: { ...this.viewport },
+      source: {
+        graphType: this.graphType,
+        layout: this.layout.options.topoType || "dot",
+      },
+      options: { ...contextOptions, format: "json" },
+    });
+    const text = options.text || formatTopologyContextAsMarkdown(context);
+    let copied = false;
+    let error = null;
+    try {
+      if (globalThis.navigator?.clipboard?.writeText) {
+        await globalThis.navigator.clipboard.writeText(text);
+        copied = true;
+      }
+    } catch (copyError) {
+      error = copyError;
+    }
+    const detail = { copied, text, context, error };
+    this.container.dispatchEvent(new CustomEvent("topo:context-copy", {
+      detail,
+      bubbles: true,
+    }));
+    return detail;
+  }
+
+  resolveContextOptions(options = {}) {
+    if ((options.scope === "selected" || !options.scope) && !hasSelection(this.selection)) {
+      return {
+        ...options,
+        scope: "visible",
+        includeMode: "visible",
+      };
+    }
+    return options;
   }
 
   zoomTo(zoom) {
@@ -998,6 +1301,10 @@ export class NewTopoGraph {
       y: rect.height / 2 - center.y * nextZoom,
     };
     this.applyViewport();
+  }
+
+  getViewport() {
+    return { ...this.viewport };
   }
 
   setViewport(viewport = {}) {
@@ -1053,6 +1360,7 @@ export class NewTopoGraph {
     if (this.nodeAnimationTimer) clearTimeout(this.nodeAnimationTimer);
     if (this.viewportTimer) clearTimeout(this.viewportTimer);
     document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
+    document.removeEventListener("keydown", this.handleKeydown);
     this.nodeElementById.clear();
     this.edgeElementById.clear();
     this.container.innerHTML = "";
@@ -1135,10 +1443,15 @@ export class NewTopoGraph {
     this.debugPanel.className = "topo-debug-panel";
     this.debugPanel.hidden = !this.debugPanelEnabled;
 
+    this.selectionMarquee = document.createElement("div");
+    this.selectionMarquee.className = "topo-selection-marquee";
+    this.selectionMarquee.hidden = true;
+
     this.viewportEl.append(this.svg, this.nodeLayer);
-    this.root.append(this.viewportEl, this.minimap, this.debugPanel);
+    this.root.append(this.viewportEl, this.selectionMarquee, this.minimap, this.debugPanel);
     this.root.classList.toggle("has-minimap", this.minimapEnabled);
     this.root.classList.toggle("has-debug-panel", this.debugPanelEnabled);
+    this.root.classList.toggle("is-selection-mode-area", this.selectionMode === "area");
     this.container.append(this.root);
     this.bindMinimapEvents();
     this.renderDebugPanel();
@@ -1146,10 +1459,29 @@ export class NewTopoGraph {
 
   bindCanvasEvents() {
     let dragging = false;
+    let areaDragging = false;
     let start = null;
 
     this.root.addEventListener("pointerdown", (event) => {
       if (event.target.closest(".topo-node") || event.target.closest(".topo-edge-hit")) return;
+      if (this.shouldStartAreaSelection(event)) {
+        areaDragging = true;
+        start = {
+          x: event.clientX,
+          y: event.clientY,
+          append: isAdditiveSelectionEvent(event),
+        };
+        this.areaSelection = start;
+        this.root.setPointerCapture(event.pointerId);
+        this.root.classList.add("is-area-selecting");
+        this.updateSelectionMarquee(start, event);
+        this.container.dispatchEvent(new CustomEvent("topo:selection-area-start", {
+          detail: { point: this.toGraphPoint(event.clientX, event.clientY) },
+          bubbles: true,
+        }));
+        this.handleCloseInfo?.();
+        return;
+      }
       dragging = true;
       start = { x: event.clientX, y: event.clientY, vx: this.viewport.x, vy: this.viewport.y };
       this.root.setPointerCapture(event.pointerId);
@@ -1158,24 +1490,115 @@ export class NewTopoGraph {
     });
 
     this.root.addEventListener("pointermove", (event) => {
+      if (areaDragging && start) {
+        this.updateSelectionMarquee(start, event);
+        return;
+      }
       if (!dragging || !start) return;
       this.viewport.x = start.vx + event.clientX - start.x;
       this.viewport.y = start.vy + event.clientY - start.y;
       this.applyViewport();
     });
 
-    this.root.addEventListener("pointerup", (event) => {
+    const endDrag = (event) => {
+      if (areaDragging && start) {
+        const rect = this.getGraphRectFromClientPoints(start, event);
+        const append = start.append;
+        const cancelled = this.areaSelection?.cancelled;
+        areaDragging = false;
+        this.areaSelection = null;
+        start = null;
+        this.hideSelectionMarquee();
+        this.root.classList.remove("is-area-selecting");
+        try {
+          this.root.releasePointerCapture(event.pointerId);
+        } catch {
+          // Pointer capture can already be released.
+        }
+        if (!cancelled) this.selectArea(rect, { append });
+        return;
+      }
+      if (!dragging) return;
       dragging = false;
       start = null;
-      this.root.releasePointerCapture(event.pointerId);
+      try {
+        this.root.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture can already be released.
+      }
       this.root.classList.remove("is-panning");
-    });
+    };
+
+    this.root.addEventListener("pointerup", endDrag);
+    this.root.addEventListener("pointercancel", endDrag);
 
     this.root.addEventListener("wheel", (event) => {
       event.preventDefault();
       const delta = event.deltaY > 0 ? -0.08 : 0.08;
       this.zoomTo(this.viewport.zoom + delta);
     }, { passive: false });
+  }
+
+  shouldStartAreaSelection(event) {
+    return this.selectionMode === "area" || event.shiftKey;
+  }
+
+  updateSelectionMarquee(start, event) {
+    if (!this.selectionMarquee) return;
+    const rect = this.root.getBoundingClientRect();
+    const left = Math.min(start.x, event.clientX) - rect.left;
+    const top = Math.min(start.y, event.clientY) - rect.top;
+    const width = Math.abs(event.clientX - start.x);
+    const height = Math.abs(event.clientY - start.y);
+    Object.assign(this.selectionMarquee.style, {
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${width}px`,
+      height: `${height}px`,
+    });
+    this.selectionMarquee.hidden = false;
+  }
+
+  hideSelectionMarquee() {
+    if (!this.selectionMarquee) return;
+    this.selectionMarquee.hidden = true;
+    Object.assign(this.selectionMarquee.style, {
+      left: "0px",
+      top: "0px",
+      width: "0px",
+      height: "0px",
+    });
+  }
+
+  getGraphRectFromClientPoints(start, event) {
+    const a = this.toGraphPoint(start.x, start.y);
+    const b = this.toGraphPoint(event.clientX, event.clientY);
+    return normalizeRect({
+      x: Math.min(a.x, b.x),
+      y: Math.min(a.y, b.y),
+      width: Math.abs(b.x - a.x),
+      height: Math.abs(b.y - a.y),
+    });
+  }
+
+  toGraphPoint(clientX, clientY) {
+    const rect = this.container.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left - this.viewport.x) / this.viewport.zoom,
+      y: (clientY - rect.top - this.viewport.y) / this.viewport.zoom,
+    };
+  }
+
+  handleGraphKeydown(event) {
+    if (event.key !== "Escape") return;
+    if (isEditableTarget(event.target)) return;
+    if (this.areaSelection) {
+      this.areaSelection.cancelled = true;
+      this.hideSelectionMarquee();
+      this.root?.classList.remove("is-area-selecting");
+      return;
+    }
+    if (this.selection.nodes.length || this.selection.edges.length) this.clearSelection();
   }
 
   bindMinimapEvents() {
@@ -1350,9 +1773,7 @@ export class NewTopoGraph {
         this.suppressNodeClick = null;
         return;
       }
-      this.selected = { type: "node", id: currentNode.id };
-      this.renderSelection();
-      this.handleNodeClick?.(currentNode);
+      this.selectGraphItem("node", currentNode.id, event, currentNode);
     });
     return element;
   }
@@ -1535,9 +1956,7 @@ export class NewTopoGraph {
     hit.addEventListener("click", (event) => {
       const currentEdge = group.__topoEdge || edge;
       event.stopPropagation();
-      this.selected = { type: "edge", id: currentEdge.id };
-      this.renderSelection();
-      this.handleEdgeClick?.(currentEdge);
+      this.selectGraphItem("edge", currentEdge.id, event, currentEdge);
     });
 
     group.append(visible, hit);
@@ -1733,8 +2152,7 @@ export class NewTopoGraph {
         if (this.suppressNodeClick === node.id) this.suppressNodeClick = null;
       }, 0);
       this.renderEdges();
-      this.selected = { type: "node", id: node.id };
-      this.renderSelection();
+      this.setSelection({ nodes: [node.id], edges: [], primary: { type: "node", id: node.id } });
       this.handleNodeClick?.(node);
       this.container.dispatchEvent(new CustomEvent("topo:node-drag", {
         detail: { node: { ...cloneGraphItem(node), positionAbsolute: this.getNodeAbsolutePosition(node) } },
@@ -1930,12 +2348,21 @@ export class NewTopoGraph {
   }
 
   renderSelection() {
-    this.root.querySelectorAll(".is-selected").forEach((item) => item.classList.remove("is-selected"));
+    this.root.querySelectorAll(".is-selected, .is-multi-selected").forEach((item) => {
+      item.classList.remove("is-selected", "is-multi-selected");
+    });
+    const selection = this.selection || { nodes: [], edges: [] };
+    for (const id of selection.nodes || []) {
+      this.root.querySelector(`.topo-node[data-node-id="${cssEscape(id)}"]`)?.classList.add("is-multi-selected");
+    }
+    for (const id of selection.edges || []) {
+      this.root.querySelector(`.topo-edge[data-edge-id="${cssEscape(id)}"]`)?.classList.add("is-multi-selected");
+    }
     if (!this.selected) return;
     const selector = this.selected.type === "node"
       ? `.topo-node[data-node-id="${cssEscape(this.selected.id)}"]`
       : `.topo-edge[data-edge-id="${cssEscape(this.selected.id)}"]`;
-    this.root.querySelector(selector)?.classList.add("is-selected");
+    this.root.querySelector(selector)?.classList.add("is-selected", "is-multi-selected");
   }
 
   applyViewport() {
@@ -2441,6 +2868,167 @@ function patchFromRealtimeItem(item = {}) {
     ...(position ? { position } : {}),
     ...(style ? { style } : {}),
   };
+}
+
+function cloneSelection(selection = {}) {
+  return {
+    nodes: [...(selection.nodes || [])],
+    edges: [...(selection.edges || [])],
+    primary: selection.primary ? { ...selection.primary } : null,
+  };
+}
+
+function areSelectionsEqual(left = {}, right = {}) {
+  return arrayEqual(left.nodes || [], right.nodes || [])
+    && arrayEqual(left.edges || [], right.edges || [])
+    && (left.primary?.type || "") === (right.primary?.type || "")
+    && (left.primary?.id || "") === (right.primary?.id || "");
+}
+
+function arrayEqual(left, right) {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function resolvePrimarySelection(selection = {}) {
+  if (selection.nodes?.length) return { type: "node", id: selection.nodes[0] };
+  if (selection.edges?.length) return { type: "edge", id: selection.edges[0] };
+  return null;
+}
+
+function hasSelection(selection = {}) {
+  return Boolean(selection.nodes?.length || selection.edges?.length);
+}
+
+function normalizeRect(rect = {}) {
+  const x = Number(rect.x) || 0;
+  const y = Number(rect.y) || 0;
+  const width = Number(rect.width) || 0;
+  const height = Number(rect.height) || 0;
+  return {
+    x: width < 0 ? x + width : x,
+    y: height < 0 ? y + height : y,
+    width: Math.abs(width),
+    height: Math.abs(height),
+  };
+}
+
+function doesNodeRectIntersect(node, rect, resolvePosition) {
+  const position = resolvePosition(node);
+  const size = getNodeSize(node);
+  return rectsIntersect(rect, {
+    x: position.x,
+    y: position.y,
+    width: size.width,
+    height: size.height,
+  });
+}
+
+function rectsIntersect(left, right) {
+  return left.x <= right.x + right.width
+    && left.x + left.width >= right.x
+    && left.y <= right.y + right.height
+    && left.y + left.height >= right.y;
+}
+
+function segmentIntersectsRect(a, b, rect) {
+  if (pointInRect(a, rect) || pointInRect(b, rect)) return true;
+  const topLeft = { x: rect.x, y: rect.y };
+  const topRight = { x: rect.x + rect.width, y: rect.y };
+  const bottomRight = { x: rect.x + rect.width, y: rect.y + rect.height };
+  const bottomLeft = { x: rect.x, y: rect.y + rect.height };
+  return segmentsIntersect(a, b, topLeft, topRight)
+    || segmentsIntersect(a, b, topRight, bottomRight)
+    || segmentsIntersect(a, b, bottomRight, bottomLeft)
+    || segmentsIntersect(a, b, bottomLeft, topLeft);
+}
+
+function pointInRect(point, rect) {
+  return point.x >= rect.x
+    && point.x <= rect.x + rect.width
+    && point.y >= rect.y
+    && point.y <= rect.y + rect.height;
+}
+
+function segmentsIntersect(a, b, c, d) {
+  const orientationA = orientation(a, b, c);
+  const orientationB = orientation(a, b, d);
+  const orientationC = orientation(c, d, a);
+  const orientationD = orientation(c, d, b);
+
+  if (orientationA !== orientationB && orientationC !== orientationD) return true;
+  if (orientationA === 0 && pointOnSegment(c, a, b)) return true;
+  if (orientationB === 0 && pointOnSegment(d, a, b)) return true;
+  if (orientationC === 0 && pointOnSegment(a, c, d)) return true;
+  if (orientationD === 0 && pointOnSegment(b, c, d)) return true;
+  return false;
+}
+
+function orientation(a, b, c) {
+  const value = (b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y);
+  if (Math.abs(value) < 0.000001) return 0;
+  return value > 0 ? 1 : 2;
+}
+
+function pointOnSegment(point, a, b) {
+  return point.x <= Math.max(a.x, b.x) + 0.000001
+    && point.x >= Math.min(a.x, b.x) - 0.000001
+    && point.y <= Math.max(a.y, b.y) + 0.000001
+    && point.y >= Math.min(a.y, b.y) - 0.000001;
+}
+
+function matchesSelectionCriteria(item, kind, criteria = {}) {
+  if (typeof criteria.predicate === "function" && criteria.predicate(item, kind)) return true;
+  const data = item.data || {};
+  const tagValues = Array.isArray(data.tags) ? data.tags : data.tags ? [data.tags] : [];
+  if (matchesCriteriaValue(item.id, criteria.ids, criteria.id)) return true;
+  if (kind === "node" && matchesCriteriaValue(item.id, criteria.nodeIds, criteria.nodeId)) return true;
+  if (kind === "edge" && matchesCriteriaValue(item.id, criteria.edgeIds, criteria.edgeId)) return true;
+  if (matchesCriteriaValue(item.type, criteria.types, criteria.type)) return true;
+  if (matchesCriteriaValue(data.domain, criteria.domains, criteria.domain)) return true;
+  if (matchesCriteriaValue(data.status, criteria.statuses, criteria.status)) return true;
+  if (matchesCriteriaValue(data.group, criteria.groups, criteria.group)) return true;
+  if (matchesCriteriaList(tagValues, criteria.tags, criteria.tag)) return true;
+  if (kind === "edge" && (
+    matchesCriteriaValue(item.source, criteria.sources, criteria.source)
+    || matchesCriteriaValue(item.target, criteria.targets, criteria.target)
+  )) {
+    return true;
+  }
+  return false;
+}
+
+function matchesCriteriaValue(value, plural, singular) {
+  const values = normalizeCriteriaValues(plural, singular);
+  if (!values.length) return false;
+  return values.some((item) => String(value ?? "") === String(item));
+}
+
+function matchesCriteriaList(itemValues, plural, singular) {
+  const values = normalizeCriteriaValues(plural, singular);
+  if (!values.length) return false;
+  const normalizedItems = new Set(itemValues.map((item) => String(item)));
+  return values.some((item) => normalizedItems.has(String(item)));
+}
+
+function normalizeCriteriaValues(plural, singular) {
+  const values = [];
+  if (Array.isArray(plural)) values.push(...plural);
+  else if (plural instanceof Set) values.push(...plural);
+  else if (plural != null) values.push(plural);
+  if (singular != null) values.push(singular);
+  return values.filter((value) => value != null && value !== "");
+}
+
+function isAdditiveSelectionEvent(event) {
+  if (!event) return false;
+  return event.ctrlKey || event.metaKey;
+}
+
+function isEditableTarget(target) {
+  if (!target) return false;
+  const tagName = target.tagName;
+  return target.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
 }
 
 function formatDebugValue(value, suffix = "") {

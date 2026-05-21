@@ -17,6 +17,7 @@
 .flow-legend,
 .topo-context-menu,
 .topo-tooltip,
+.topo-selection-marquee,
 .topo-detail-empty,
 .topo-detail-header,
 .topo-detail-list,
@@ -75,6 +76,10 @@
   color: #ffffff;
   background: var(--primary, var(--topo-primary));
   border-color: var(--primary, var(--topo-primary));
+}
+
+.flow-toolbar button[data-action="select-area"].active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary, var(--topo-primary)) 22%, transparent);
 }
 
 .toolbar-divider {
@@ -470,18 +475,37 @@
   box-shadow: 0 18px 32px rgba(0, 100, 200, 0.24);
 }
 
-.topo-node:hover,
-.topo-node.is-selected {
+.topo-node:hover {
   box-shadow: 0 14px 28px rgba(0, 100, 200, 0.18);
   border-color: #87b7e8;
 }
 
-.new-topo-graph.has-hover-highlight .topo-node.is-hover-dimmed {
+.topo-node.is-selected {
+  z-index: 8;
+  border-color: var(--primary, var(--topo-primary));
+  outline: 2px solid color-mix(in srgb, var(--primary, var(--topo-primary)) 72%, #ffffff 28%);
+  outline-offset: 3px;
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, var(--primary, var(--topo-primary)) 18%, transparent),
+    0 18px 36px rgba(0, 100, 200, 0.24);
+}
+
+.topo-node.is-multi-selected:not(.is-selected) {
+  z-index: 7;
+  border-color: color-mix(in srgb, var(--primary, var(--topo-primary)) 70%, #ffffff 30%);
+  outline: 2px solid color-mix(in srgb, var(--primary, var(--topo-primary)) 46%, transparent);
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--primary, var(--topo-primary)) 12%, transparent),
+    0 14px 28px rgba(0, 100, 200, 0.18);
+}
+
+.new-topo-graph.has-hover-highlight .topo-node.is-hover-dimmed:not(.is-selected):not(.is-multi-selected) {
   opacity: 0.28;
   filter: saturate(0.45);
 }
 
-.new-topo-graph.has-hover-highlight .topo-node.is-hover-related {
+.new-topo-graph.has-hover-highlight .topo-node.is-hover-related:not(.is-selected):not(.is-multi-selected) {
   z-index: 5;
   border-color: #3b82f6;
   box-shadow: 0 16px 32px rgba(0, 100, 200, 0.2);
@@ -563,7 +587,7 @@
   stroke-width: 2;
   opacity: 0.92;
   vector-effect: non-scaling-stroke;
-  transition: opacity 160ms ease, stroke-width 160ms ease;
+  transition: filter 160ms ease, opacity 160ms ease, stroke-width 160ms ease;
 }
 
 .topo-edge-path.status-warn {
@@ -582,9 +606,21 @@
   vector-effect: non-scaling-stroke;
 }
 
-.topo-edge.is-selected .topo-edge-path {
+.topo-edge.is-selected .topo-edge-path,
+.topo-edge.is-multi-selected .topo-edge-path {
   stroke: var(--primary, var(--topo-primary));
-  stroke-width: 3;
+  stroke-dasharray: none;
+  stroke-linecap: round;
+  opacity: 1;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--primary, var(--topo-primary)) 34%, transparent));
+}
+
+.topo-edge.is-selected .topo-edge-path {
+  stroke-width: 4.5px;
+}
+
+.topo-edge.is-multi-selected:not(.is-selected) .topo-edge-path {
+  stroke-width: 3.25px;
 }
 
 .new-topo-graph.has-hover-highlight .topo-edge.is-hover-dimmed .topo-edge-path {
@@ -721,6 +757,25 @@
   height: 1px;
   margin: 5px 4px;
   background: #eef2f6;
+}
+
+.topo-selection-marquee {
+  position: absolute;
+  z-index: 32;
+  border: 1px solid var(--primary, var(--topo-primary));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--primary, var(--topo-primary)) 12%, transparent);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.78) inset;
+  pointer-events: none;
+}
+
+.topo-selection-marquee[hidden] {
+  display: none;
+}
+
+.new-topo-graph.is-selection-mode-area .topo-viewport,
+.new-topo-graph.is-area-selecting .topo-viewport {
+  cursor: crosshair;
 }
 
 .topo-tooltip {

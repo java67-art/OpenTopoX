@@ -52,6 +52,14 @@ export {
   processParallelEdges,
 } from "./TopologyDataUtils.js";
 export {
+  TOPOLOGY_CONTEXT_SCHEMA,
+  createTopologyContext,
+  formatTopologyContextAsMarkdown,
+  getVisibleGraphData,
+  resolveContextGraph,
+  serializeTopologyContext,
+} from "./TopologyContextBridge.js";
+export {
   DEFAULT_EXPAND_LIMIT,
   DEFAULT_MAX_RENDER_NODES,
   buildTopologyDetailModel,
