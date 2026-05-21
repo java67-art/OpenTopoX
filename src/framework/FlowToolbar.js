@@ -21,7 +21,6 @@ export class FlowToolbar {
     this.enableContextCopy = enableContextCopy;
     this.enableAreaSelection = enableAreaSelection;
     this.contextOptions = contextOptions;
-    if (this.enableAreaSelection) this.graph?.setSelectionEnabled?.(true);
     this.children = children;
     this.layouts = layouts || [
       { key: "fdp", label: "FDP", title: "Force layout" },
@@ -39,6 +38,7 @@ export class FlowToolbar {
     this.handleSelection = () => this.syncSelectionMode();
     this.handleClick = (event) => this.handleToolbarClick(event);
     this.graphEventRoot = null;
+    if (this.enableAreaSelection) this.getGraphApi()?.setSelectionEnabled?.(true);
     this.render();
     this.bindGraphEvents();
   }

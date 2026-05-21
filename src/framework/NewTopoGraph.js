@@ -1173,6 +1173,8 @@ export class NewTopoGraph {
     if (!next) {
       this.setSelectionMode("default");
       this.clearSelection();
+    } else {
+      this.renderSelection();
     }
     this.root?.classList.toggle("is-selection-enabled", this.selectionEnabled);
     this.container.dispatchEvent(new CustomEvent("topo:selection-enabled-change", {
