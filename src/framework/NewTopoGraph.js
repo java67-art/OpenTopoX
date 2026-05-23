@@ -1331,7 +1331,11 @@ export class NewTopoGraph {
 
   getEdgesIntersectingRect(rect, selectedNodeIds = [], { edgeMode = "intersect" } = {}) {
     const selectedNodeIdSet = new Set(selectedNodeIds);
-    return this.edges
+    if (edgeMode === "connected" && !selectedNodeIdSet.size) return [];
+    const edgeCandidates = edgeMode === "connected" && selectedNodeIdSet.size
+      ? this.getConnectedEdgeIds(selectedNodeIdSet).map((id) => this.edgeById.get(id)).filter(Boolean)
+      : this.edges;
+    return edgeCandidates
       .filter((edge) => {
         const source = this.nodeById.get(edge.source);
         const target = this.nodeById.get(edge.target);
@@ -1473,8 +1477,9 @@ export class NewTopoGraph {
   }
 
   fitView({ padding = 0.12, nodes } = {}) {
-    const selectedNodes = nodes?.length
-      ? this.nodes.filter((node) => nodes.some((item) => item.id === node.id))
+    const nodeIds = nodes?.length ? new Set(nodes.map((item) => typeof item === "string" ? item : item?.id).filter(Boolean)) : null;
+    const selectedNodes = nodeIds?.size
+      ? [...nodeIds].map((id) => this.nodeById.get(id)).filter(Boolean)
       : this.nodes;
     const bounds = this.getBounds(selectedNodes);
     const rect = this.container.getBoundingClientRect();
@@ -3284,6 +3289,17 @@ function setStatusClass(element, status = "ok") {
 function getRelatedData(focusId, nodes, edges, { degree = 1, direction = "both" } = {}) {
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   if (!nodeById.has(focusId)) return { nodes: [], edges: [] };
+  const edgeIdsByNodeId = new Map();
+  const edgeById = new Map();
+  for (const edge of edges) {
+    if (!edge?.id) continue;
+    edgeById.set(edge.id, edge);
+    for (const nodeId of [edge.source, edge.target]) {
+      if (!nodeId) continue;
+      if (!edgeIdsByNodeId.has(nodeId)) edgeIdsByNodeId.set(nodeId, new Set());
+      edgeIdsByNodeId.get(nodeId).add(edge.id);
+    }
+  }
 
   const relatedNodes = new Set([focusId]);
   const relatedEdges = new Set();
@@ -3292,7 +3308,13 @@ function getRelatedData(focusId, nodes, edges, { degree = 1, direction = "both" 
 
   for (let level = 0; level < maxDegree && frontier.size; level += 1) {
     const next = new Set();
-    for (const edge of edges) {
+    const candidateEdgeIds = new Set();
+    for (const frontierNodeId of frontier) {
+      for (const edgeId of edgeIdsByNodeId.get(frontierNodeId) || []) candidateEdgeIds.add(edgeId);
+    }
+    for (const edgeId of candidateEdgeIds) {
+      const edge = edgeById.get(edgeId);
+      if (!edge) continue;
       const isIncoming = frontier.has(edge.target);
       const isOutgoing = frontier.has(edge.source);
       const allowed = direction === "upstream"
