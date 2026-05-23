@@ -445,6 +445,11 @@ export interface NewTopoGraphOptions {
     autoPerformanceMode?: boolean;
     performanceNodeLimit?: number;
     performanceTotalElementLimit?: number;
+    hideEdgesOnViewportMove?: boolean;
+    viewportInteractionSettleMs?: number;
+    canvasEdges?: boolean;
+    canvasEdgeThreshold?: number;
+    canvasEdgePixelRatio?: number;
     validateData?: boolean;
     allowedNodeTypes?: string[] | Set<string>;
     throwOnInvalid?: boolean;

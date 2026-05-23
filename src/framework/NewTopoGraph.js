@@ -66,6 +66,11 @@ export class NewTopoGraph {
     this.autoPerformanceMode = config.autoPerformanceMode ?? true;
     this.performanceNodeLimit = config.performanceNodeLimit ?? 1000;
     this.performanceTotalElementLimit = config.performanceTotalElementLimit ?? 2500;
+    this.hideEdgesOnViewportMove = config.hideEdgesOnViewportMove ?? true;
+    this.viewportInteractionSettleMs = config.viewportInteractionSettleMs ?? 220;
+    this.canvasEdges = config.canvasEdges ?? true;
+    this.canvasEdgeThreshold = config.canvasEdgeThreshold ?? 2000;
+    this.canvasEdgePixelRatio = config.canvasEdgePixelRatio ?? 1.5;
     this.validateData = config.validateData ?? true;
     this.allowedNodeTypes = config.allowedNodeTypes || [];
     this.throwOnInvalid = config.throwOnInvalid ?? false;
@@ -79,11 +84,25 @@ export class NewTopoGraph {
     this.lastRenderStats = { nodes: 0, edges: 0, durationMs: 0, performanceMode: false };
     this.layoutVersion = 0;
     this.viewportTimer = null;
+    this.viewportInteractionTimer = null;
     this.nodeElementById = new Map();
     this.edgeElementById = new Map();
+    this.nodeById = new Map();
+    this.edgeById = new Map();
+    this.edgeIdsByNodeId = new Map();
+    this.childrenByParentId = new Map();
+    this.renderedSelection = { nodes: new Set(), edges: new Set(), primary: null };
+    this.renderedHover = { nodes: new Set(), edges: new Set() };
     this.edgeRenderFrame = null;
+    this.edgeCanvasFrame = null;
+    this.pendingEdgeRenderIds = null;
+    this.pendingEdgeGeometryOnly = false;
     this.hoverRenderFrame = null;
     this.minimapRenderFrame = null;
+    this.pendingMinimapRenderViewportOnly = false;
+    this.minimapStaticDirty = true;
+    this.minimapViewportElement = null;
+    this.minimapTransform = null;
     this.nodeAnimationFrame = null;
     this.nodeAnimationTimer = null;
     this.pendingNodeAnimation = null;
@@ -364,6 +383,64 @@ export class NewTopoGraph {
     this.root.classList.add(`theme-${theme}`);
   }
 
+  rebuildGraphIndexes() {
+    this.nodeById = new Map(this.nodes.map((node) => [node.id, node]));
+    this.edgeById = new Map(this.edges.map((edge) => [edge.id, edge]));
+    this.edgeIdsByNodeId = new Map();
+    this.childrenByParentId = new Map();
+    for (const node of this.nodes) {
+      if (!node.parentId) continue;
+      if (!this.childrenByParentId.has(node.parentId)) this.childrenByParentId.set(node.parentId, new Set());
+      this.childrenByParentId.get(node.parentId).add(node.id);
+    }
+    for (const edge of this.edges) this.addEdgeToNodeIndex(edge);
+    this.markMinimapDirty();
+    return this;
+  }
+
+  updateNodeIndex(node, previousNode = this.nodeById.get(node?.id)) {
+    if (!node?.id) return;
+    if (previousNode?.parentId && previousNode.parentId !== node.parentId) {
+      this.childrenByParentId.get(previousNode.parentId)?.delete(node.id);
+    }
+    this.nodeById.set(node.id, node);
+    if (node.parentId && previousNode?.parentId !== node.parentId) {
+      if (!this.childrenByParentId.has(node.parentId)) this.childrenByParentId.set(node.parentId, new Set());
+      this.childrenByParentId.get(node.parentId).add(node.id);
+    }
+  }
+
+  updateEdgeIndex(edge, previousEdge = this.edgeById.get(edge?.id)) {
+    if (!edge?.id) return;
+    const endpointChanged = previousEdge
+      && (previousEdge.source !== edge.source || previousEdge.target !== edge.target);
+    if (endpointChanged) this.removeEdgeFromNodeIndex(previousEdge);
+    this.edgeById.set(edge.id, edge);
+    if (!previousEdge || endpointChanged) this.addEdgeToNodeIndex(edge);
+  }
+
+  addEdgeToNodeIndex(edge) {
+    if (!edge?.id) return;
+    for (const nodeId of [edge.source, edge.target]) {
+      if (!nodeId) continue;
+      if (!this.edgeIdsByNodeId.has(nodeId)) this.edgeIdsByNodeId.set(nodeId, new Set());
+      this.edgeIdsByNodeId.get(nodeId).add(edge.id);
+    }
+  }
+
+  removeEdgeFromNodeIndex(edge) {
+    if (!edge?.id) return;
+    for (const nodeId of [edge.source, edge.target]) {
+      if (!nodeId) continue;
+      this.edgeIdsByNodeId.get(nodeId)?.delete(edge.id);
+    }
+  }
+
+  markMinimapDirty() {
+    this.minimapStaticDirty = true;
+    this.minimapTransform = null;
+  }
+
   async setData({
     nodes = [],
     edges = [],
@@ -425,6 +502,7 @@ export class NewTopoGraph {
       markerEnd: "arrow",
       ...edge,
     }));
+    this.rebuildGraphIndexes();
     this.pruneSelection({ emit: false });
     this.syncAutoPerformanceMode({ nodeCount: this.nodes.length, edgeCount: this.edges.length });
     this.pendingNodeAnimation = this.createNodeAnimation(previousPositions, { centerNodeId, disableAnimate });
@@ -530,6 +608,7 @@ export class NewTopoGraph {
 
     this.nodes = nodes;
     this.edges = edges;
+    this.rebuildGraphIndexes();
     this.pruneSelection({ emit: false });
     this.syncAutoPerformanceMode({ nodeCount: this.nodes.length, edgeCount: this.edges.length });
     this.pendingNodeAnimation = this.createNodeAnimation(previousPositions, { centerNodeId, disableAnimate });
@@ -571,13 +650,16 @@ export class NewTopoGraph {
     const startedAt = performance.now();
     let changed = false;
     let updatedNode = null;
+    let previousNode = null;
     this.nodes = this.nodes.map((node) => {
       if (node.id !== id) return node;
       changed = true;
+      previousNode = node;
       updatedNode = { ...node, data: { ...node.data, ...patch } };
       return updatedNode;
     });
     if (!changed) return null;
+    this.updateNodeIndex(updatedNode, previousNode);
     this.renderNodeUpdates([id]);
     this.renderEdgeUpdates(this.getConnectedEdgeIds([id]));
     this.scheduleMinimapRender();
@@ -589,15 +671,18 @@ export class NewTopoGraph {
     const startedAt = performance.now();
     let changed = false;
     let updatedNode = null;
+    let previousNode = null;
     this.nodes = this.nodes.map((node) => {
       if (node.id !== id) return node;
       const nextPatch = typeof patch === "function" ? patch(cloneGraphItem(node)) : patch;
       if (!nextPatch) return node;
       changed = true;
+      previousNode = node;
       updatedNode = mergeNodePatch(node, nextPatch);
       return updatedNode;
     });
     if (!changed) return null;
+    this.updateNodeIndex(updatedNode, previousNode);
     this.renderNodeUpdates([id]);
     this.renderEdgeUpdates(this.getConnectedEdgeIds([id]));
     this.scheduleMinimapRender();
@@ -609,13 +694,16 @@ export class NewTopoGraph {
     const startedAt = performance.now();
     let changed = false;
     let updatedEdge = null;
+    let previousEdge = null;
     this.edges = this.edges.map((edge) => {
       if (edge.id !== id) return edge;
       changed = true;
+      previousEdge = edge;
       updatedEdge = { ...edge, data: { ...edge.data, ...patch } };
       return updatedEdge;
     });
     if (!changed) return null;
+    this.updateEdgeIndex(updatedEdge, previousEdge);
     this.renderEdgeUpdates([id]);
     this.scheduleMinimapRender();
     this.recordPatchStats({ startedAt, nodePatches: 0, edgePatches: 1 });
@@ -626,15 +714,18 @@ export class NewTopoGraph {
     const startedAt = performance.now();
     let changed = false;
     let updatedEdge = null;
+    let previousEdge = null;
     this.edges = this.edges.map((edge) => {
       if (edge.id !== id) return edge;
       const nextPatch = typeof patch === "function" ? patch(cloneGraphItem(edge)) : patch;
       if (!nextPatch) return edge;
       changed = true;
+      previousEdge = edge;
       updatedEdge = mergeEdgePatch(edge, nextPatch);
       return updatedEdge;
     });
     if (!changed) return null;
+    this.updateEdgeIndex(updatedEdge, previousEdge);
     this.renderEdgeUpdates([id]);
     this.scheduleMinimapRender();
     this.recordPatchStats({ startedAt, nodePatches: 0, edgePatches: 1 });
@@ -725,6 +816,9 @@ export class NewTopoGraph {
     let edgePatchCount = 0;
     const changedNodeIds = new Set();
     const changedEdgeIds = new Set();
+    const updatedNodePairs = [];
+    const updatedEdgePairs = [];
+    let topologyIndexChanged = false;
     if (nodePatches.length) {
       const patchById = new Map(nodePatches.map((item) => [item.id, patchFromRealtimeItem(item)]));
       this.nodes = this.nodes.map((node) => {
@@ -732,7 +826,10 @@ export class NewTopoGraph {
         if (!nextPatch) return node;
         nodePatchCount += 1;
         changedNodeIds.add(node.id);
-        return mergeNodePatch(node, nextPatch);
+        const nextNode = mergeNodePatch(node, nextPatch);
+        if (nextNode.parentId !== node.parentId) topologyIndexChanged = true;
+        updatedNodePairs.push([nextNode, node]);
+        return nextNode;
       });
     }
     if (edgePatches.length) {
@@ -742,10 +839,19 @@ export class NewTopoGraph {
         if (!nextPatch) return edge;
         edgePatchCount += 1;
         changedEdgeIds.add(edge.id);
-        return mergeEdgePatch(edge, nextPatch);
+        const nextEdge = mergeEdgePatch(edge, nextPatch);
+        if (nextEdge.source !== edge.source || nextEdge.target !== edge.target) topologyIndexChanged = true;
+        updatedEdgePairs.push([nextEdge, edge]);
+        return nextEdge;
       });
     }
     if (!nodePatchCount && !edgePatchCount) return { nodePatches: 0, edgePatches: 0 };
+    if (topologyIndexChanged) {
+      this.rebuildGraphIndexes();
+    } else {
+      for (const [node, previousNode] of updatedNodePairs) this.updateNodeIndex(node, previousNode);
+      for (const [edge, previousEdge] of updatedEdgePairs) this.updateEdgeIndex(edge, previousEdge);
+    }
     if (nodePatchCount) this.renderNodeUpdates(changedNodeIds);
     const affectedEdgeIds = new Set([...changedEdgeIds, ...this.getConnectedEdgeIds(changedNodeIds)]);
     if (affectedEdgeIds.size) this.renderEdgeUpdates(affectedEdgeIds);
@@ -821,6 +927,7 @@ export class NewTopoGraph {
       markerEnd: "arrow",
       ...edge,
     }));
+    this.rebuildGraphIndexes();
     this.pruneSelection({ emit: false });
     if (!options.preserveOrigin) {
       this.originData = {
@@ -887,7 +994,7 @@ export class NewTopoGraph {
     const rankDir = this.layout.options.rankDir || "LR";
     const relatedEdge = [...edgeById.values()].find((edge) => edge.source === node.id || edge.target === node.id);
     const neighborId = relatedEdge?.source === node.id ? relatedEdge.target : relatedEdge?.source;
-    const neighbor = neighborId ? this.nodes.find((item) => item.id === neighborId) : null;
+    const neighbor = neighborId ? this.nodeById.get(neighborId) : null;
     const neighborPosition = neighbor ? this.getNodeAbsolutePosition(neighbor) : null;
     const offset = rankDir === "TB"
       ? { x: (index % 3) * 260, y: 180 + Math.floor(index / 3) * 120 }
@@ -927,7 +1034,7 @@ export class NewTopoGraph {
   }
 
   getInternalNode(id) {
-    const node = this.nodes.find((item) => item.id === id);
+    const node = this.nodeById.get(id);
     if (!node) return null;
     return {
       ...cloneGraphItem(node),
@@ -991,7 +1098,7 @@ export class NewTopoGraph {
   }
 
   focusViewportOnNode(id) {
-    const node = this.nodes.find((item) => item.id === id);
+    const node = this.nodeById.get(id);
     if (!node) return false;
 
     const rect = this.container.getBoundingClientRect();
@@ -1008,7 +1115,7 @@ export class NewTopoGraph {
   }
 
   selectNode(id, { emit = true } = {}) {
-    const node = this.nodes.find((item) => item.id === id);
+    const node = this.nodeById.get(id);
     if (!node) return null;
     if (this.selectionEnabled) {
       this.setSelection({ nodes: [id], edges: [], primary: { type: "node", id } }, { emit });
@@ -1189,13 +1296,11 @@ export class NewTopoGraph {
   }
 
   normalizeSelection(selection = {}) {
-    const validNodeIds = new Set(this.nodes.map((node) => node.id));
-    const validEdgeIds = new Set(this.edges.map((edge) => edge.id));
-    const nodes = [...new Set(selection.nodes || [])].filter((id) => validNodeIds.has(id));
-    const edges = [...new Set(selection.edges || [])].filter((id) => validEdgeIds.has(id));
+    const nodes = [...new Set(selection.nodes || [])].filter((id) => this.nodeById.has(id));
+    const edges = [...new Set(selection.edges || [])].filter((id) => this.edgeById.has(id));
     let primary = selection.primary || null;
-    if (primary?.type === "node" && !validNodeIds.has(primary.id)) primary = null;
-    if (primary?.type === "edge" && !validEdgeIds.has(primary.id)) primary = null;
+    if (primary?.type === "node" && !this.nodeById.has(primary.id)) primary = null;
+    if (primary?.type === "edge" && !this.edgeById.has(primary.id)) primary = null;
     if (!primary) primary = resolvePrimarySelection({ nodes, edges });
     return { nodes, edges, primary };
   }
@@ -1228,8 +1333,8 @@ export class NewTopoGraph {
     const selectedNodeIdSet = new Set(selectedNodeIds);
     return this.edges
       .filter((edge) => {
-        const source = this.nodes.find((node) => node.id === edge.source);
-        const target = this.nodes.find((node) => node.id === edge.target);
+        const source = this.nodeById.get(edge.source);
+        const target = this.nodeById.get(edge.target);
         if (!source || !target) return false;
         if (edgeMode === "connected") return selectedNodeIdSet.has(edge.source) && selectedNodeIdSet.has(edge.target);
         const sourceCenter = this.getNodeCenter(source);
@@ -1388,6 +1493,7 @@ export class NewTopoGraph {
 
   scheduleViewportFit({ padding = 0.12, nodes, layoutVersion = this.layoutVersion } = {}) {
     if (this.viewportTimer) clearTimeout(this.viewportTimer);
+    if (this.viewportInteractionTimer) clearTimeout(this.viewportInteractionTimer);
     this.viewportTimer = window.setTimeout(() => {
       this.viewportTimer = null;
       if (layoutVersion !== this.layoutVersion) return;
@@ -1397,6 +1503,7 @@ export class NewTopoGraph {
 
   destroy() {
     if (this.edgeRenderFrame) cancelAnimationFrame(this.edgeRenderFrame);
+    if (this.edgeCanvasFrame) cancelAnimationFrame(this.edgeCanvasFrame);
     if (this.hoverRenderFrame) cancelAnimationFrame(this.hoverRenderFrame);
     if (this.minimapRenderFrame) cancelAnimationFrame(this.minimapRenderFrame);
     if (this.nodeAnimationFrame) cancelAnimationFrame(this.nodeAnimationFrame);
@@ -1406,6 +1513,10 @@ export class NewTopoGraph {
     document.removeEventListener("keydown", this.handleKeydown);
     this.nodeElementById.clear();
     this.edgeElementById.clear();
+    this.nodeById.clear();
+    this.edgeById.clear();
+    this.edgeIdsByNodeId.clear();
+    this.childrenByParentId.clear();
     this.container.innerHTML = "";
   }
 
@@ -1464,6 +1575,9 @@ export class NewTopoGraph {
     this.viewportEl = document.createElement("div");
     this.viewportEl.className = "topo-viewport";
 
+    this.edgeCanvas = document.createElement("canvas");
+    this.edgeCanvas.className = "topo-edge-canvas";
+
     this.svg = document.createElementNS(SVG_NS, "svg");
     this.svg.classList.add("topo-svg");
     this.edgeLayer = document.createElementNS(SVG_NS, "g");
@@ -1490,7 +1604,7 @@ export class NewTopoGraph {
     this.selectionMarquee.className = "topo-selection-marquee";
     this.selectionMarquee.hidden = true;
 
-    this.viewportEl.append(this.svg, this.nodeLayer);
+    this.viewportEl.append(this.edgeCanvas, this.svg, this.nodeLayer);
     this.root.append(this.viewportEl, this.selectionMarquee, this.minimap, this.debugPanel);
     this.root.classList.toggle("has-minimap", this.minimapEnabled);
     this.root.classList.toggle("has-debug-panel", this.debugPanelEnabled);
@@ -1764,8 +1878,11 @@ export class NewTopoGraph {
 
     const animation = isPartialRender ? null : this.pendingNodeAnimation;
     const animatedElements = [];
-    for (const node of this.nodes) {
-      if (targetIds && !targetIds.has(node.id)) continue;
+    const targetNodes = targetIds
+      ? [...targetIds].map((id) => this.nodeById.get(id)).filter(Boolean)
+      : this.nodes;
+
+    for (const node of targetNodes) {
       const type = this.resolveNodeType(node);
       const isGroupNode = isParentNode(node, type);
       const tagName = isGroupNode ? "DIV" : "BUTTON";
@@ -1787,8 +1904,8 @@ export class NewTopoGraph {
     }
     if (animatedElements.length) this.playNodeAnimation(animatedElements, animation);
     if (!isPartialRender) this.pendingNodeAnimation = null;
-    this.renderSelection();
-    this.renderHoverHighlight();
+    this.renderSelection({ force: true });
+    this.renderHoverHighlight({ force: true });
   }
 
   createNodeElement(node, type, isGroupNode) {
@@ -1850,8 +1967,13 @@ export class NewTopoGraph {
       animatedElements.push({ element, position, hasStart: Boolean(startPosition) });
     }
 
-    element.innerHTML = renderNodeContent(node, type);
+    const contentKey = getNodeContentKey(node, type, this.performanceMode);
+    if (element.__topoContentKey !== contentKey) {
+      element.innerHTML = renderNodeContent(node, type);
+      element.__topoContentKey = contentKey;
+    }
     if (this.isAgentLoop() && isAgentLoopDeletableNode(node, type)) {
+      element.querySelector(".agent-node-delete")?.remove();
       const deleteControl = document.createElement("span");
       deleteControl.className = "agent-node-delete";
       deleteControl.title = "Delete node";
@@ -1867,6 +1989,7 @@ export class NewTopoGraph {
   }
 
   syncRenderedNodeSize(element, node, baseSize) {
+    if (this.performanceMode) return this.clearMeasuredNodeSize(node, baseSize);
     const measuredWidth = Math.max(Number(baseSize.width) || 0, Math.ceil(element.scrollWidth));
     const measuredHeight = Math.max(Number(baseSize.height) || 0, Math.ceil(element.scrollHeight));
     const nextSize = {
@@ -1903,32 +2026,54 @@ export class NewTopoGraph {
   }
 
   renderEdgeUpdates(ids = []) {
-    this.renderEdges(ids);
+    if (this.performanceMode) this.renderEdgeGeometryUpdates(ids);
+    else this.renderEdges(ids);
   }
 
   getConnectedEdgeIds(nodeIds = []) {
     const idSet = nodeIds instanceof Set ? nodeIds : new Set(nodeIds);
     if (!idSet.size) return [];
-    return this.edges
-      .filter((edge) => idSet.has(edge.source) || idSet.has(edge.target))
-      .map((edge) => edge.id);
+    const edgeIds = new Set();
+    for (const nodeId of idSet) {
+      for (const edgeId of this.edgeIdsByNodeId.get(nodeId) || []) edgeIds.add(edgeId);
+    }
+    return [...edgeIds];
+  }
+
+  shouldUseCanvasEdges() {
+    return Boolean(
+      this.canvasEdges
+      && this.performanceMode
+      && !this.isAgentLoop()
+      && this.edges.length >= this.canvasEdgeThreshold,
+    );
   }
 
   renderEdges(edgeIds = null) {
+    if (this.shouldUseCanvasEdges()) {
+      this.root.classList.add("is-canvas-edges");
+      this.clearSvgEdges(edgeIds);
+      this.scheduleCanvasEdgeRender();
+      this.renderSelection({ force: true });
+      this.renderHoverHighlight({ force: true });
+      return;
+    }
+
+    this.root.classList.remove("is-canvas-edges");
+    this.clearEdgeCanvas();
     this.ensureEdgeDefs();
     const targetIds = edgeIds == null ? null : new Set(edgeIds);
     const isPartialRender = Boolean(targetIds);
-    const nextIds = new Set(this.edges.map((edge) => edge.id));
     if (!isPartialRender) {
       for (const [id, element] of this.edgeElementById.entries()) {
-        if (nextIds.has(id)) continue;
+        if (this.edgeById.has(id)) continue;
         element.remove();
         this.edgeElementById.delete(id);
       }
     }
 
-    const nodeById = new Map(this.nodes.map((node) => [node.id, node]));
-    const edgeById = new Map(this.edges.map((edge) => [edge.id, edge]));
+    const nodeById = this.nodeById;
+    const edgeById = this.edgeById;
     const shouldRenderLabel = this.edgeLabelsVisible && !(this.performanceMode && this.edges.length > this.performanceEdgeLabelLimit);
     const targetEdges = targetIds
       ? [...targetIds].map((id) => edgeById.get(id)).filter(Boolean)
@@ -1951,8 +2096,129 @@ export class NewTopoGraph {
       this.edgeElementById.set(edge.id, element);
       this.edgeLayer.appendChild(element);
     }
-    this.renderSelection();
-    this.renderHoverHighlight();
+    this.renderSelection({ force: true });
+    this.renderHoverHighlight({ force: true });
+  }
+
+  clearSvgEdges(edgeIds = null) {
+    if (edgeIds == null) {
+      for (const element of this.edgeElementById.values()) element.remove();
+      this.edgeElementById.clear();
+      return;
+    }
+    for (const id of edgeIds) {
+      this.edgeElementById.get(id)?.remove();
+      this.edgeElementById.delete(id);
+    }
+  }
+
+  scheduleCanvasEdgeRender() {
+    if (!this.edgeCanvas || this.edgeCanvasFrame) return;
+    this.edgeCanvasFrame = requestAnimationFrame(() => {
+      this.edgeCanvasFrame = null;
+      this.renderCanvasEdges();
+    });
+  }
+
+  clearEdgeCanvas() {
+    if (!this.edgeCanvas) return;
+    const context = this.edgeCanvas.getContext("2d");
+    context?.clearRect(0, 0, this.edgeCanvas.width, this.edgeCanvas.height);
+  }
+
+  renderCanvasEdges() {
+    if (!this.edgeCanvas) return;
+    if (!this.shouldUseCanvasEdges()) {
+      this.clearEdgeCanvas();
+      return;
+    }
+
+    const rect = this.container.getBoundingClientRect();
+    const width = Math.max(1, Math.ceil(rect.width));
+    const height = Math.max(1, Math.ceil(rect.height));
+    const dpr = Math.max(1, Math.min(Number(this.canvasEdgePixelRatio) || 1, window.devicePixelRatio || 1));
+    const canvasWidth = Math.ceil(width * dpr);
+    const canvasHeight = Math.ceil(height * dpr);
+    if (this.edgeCanvas.width !== canvasWidth || this.edgeCanvas.height !== canvasHeight) {
+      this.edgeCanvas.width = canvasWidth;
+      this.edgeCanvas.height = canvasHeight;
+      this.edgeCanvas.style.width = `${width}px`;
+      this.edgeCanvas.style.height = `${height}px`;
+    }
+
+    const context = this.edgeCanvas.getContext("2d");
+    if (!context) return;
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, width, height);
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = this.performanceMode ? 1.35 : 2;
+
+    const rankDir = this.layout.options.rankDir || "LR";
+    const nodeBoxById = this.getViewportNodeBoxMap();
+    const groups = new Map();
+    const margin = 96;
+    for (const edge of this.edges) {
+      const sourceBox = nodeBoxById.get(edge.source);
+      const targetBox = nodeBoxById.get(edge.target);
+      if (!sourceBox || !targetBox) continue;
+      const screenGeometry = buildEdgeGeometry(
+        viewportBoxToGeometryNode(sourceBox),
+        viewportBoxToGeometryNode(targetBox),
+        rankDir,
+        edge,
+      );
+      if (!isEdgeGeometryVisible(screenGeometry, width, height, margin)) continue;
+      const status = edge.data?.status || "ok";
+      if (!groups.has(status)) groups.set(status, []);
+      groups.get(status).push(screenGeometry);
+    }
+
+    for (const [status, geometries] of groups.entries()) {
+      context.beginPath();
+      context.strokeStyle = getEdgeCanvasColor(status);
+      context.globalAlpha = status === "ok" ? 0.78 : 0.92;
+      for (const geometry of geometries) {
+        context.moveTo(geometry.from.x, geometry.from.y);
+        context.bezierCurveTo(
+          geometry.c1.x,
+          geometry.c1.y,
+          geometry.c2.x,
+          geometry.c2.y,
+          geometry.to.x,
+          geometry.to.y,
+        );
+      }
+      context.stroke();
+    }
+    context.globalAlpha = 1;
+  }
+
+  getViewportNodeBoxMap() {
+    const containerRect = this.container.getBoundingClientRect();
+    const boxes = new Map();
+    for (const [id, node] of this.nodeById.entries()) {
+      const element = this.nodeElementById.get(id);
+      if (element) {
+        const rect = element.getBoundingClientRect();
+        boxes.set(id, {
+          x: rect.left - containerRect.left,
+          y: rect.top - containerRect.top,
+          width: rect.width,
+          height: rect.height,
+        });
+        continue;
+      }
+      const position = this.getNodeAbsolutePosition(node);
+      const size = getNodeSize(node);
+      boxes.set(id, {
+        x: position.x * this.viewport.zoom + this.viewport.x,
+        y: position.y * this.viewport.zoom + this.viewport.y,
+        width: size.width * this.viewport.zoom,
+        height: size.height * this.viewport.zoom,
+      });
+    }
+    return boxes;
   }
 
   ensureEdgeDefs() {
@@ -2062,7 +2328,7 @@ export class NewTopoGraph {
   }
 
   async insertNodeOnEdge(edgeId, node = {}, { centerNodeId } = {}) {
-    const edge = this.edges.find((item) => item.id === edgeId);
+    const edge = this.edgeById.get(edgeId);
     if (!edge) return null;
 
     const nextNode = this.createAgentLoopNode(edge, node);
@@ -2097,7 +2363,7 @@ export class NewTopoGraph {
   }
 
   async deleteNode(id, { reconnect = true, centerNodeId } = {}) {
-    const node = this.nodes.find((item) => item.id === id);
+    const node = this.nodeById.get(id);
     if (!node) return null;
     const incoming = this.edges.filter((edge) => edge.target === id);
     const outgoing = this.edges.filter((edge) => edge.source === id);
@@ -2159,6 +2425,7 @@ export class NewTopoGraph {
       nodeY: startPosition.y,
       moved: false,
     };
+    const connectedEdgeIds = this.getConnectedEdgeIds([node.id]);
 
     const move = (moveEvent) => {
       const dx = (moveEvent.clientX - start.clientX) / this.viewport.zoom;
@@ -2174,8 +2441,8 @@ export class NewTopoGraph {
       element.classList.add("is-dragging");
       this.root.classList.add("is-node-dragging");
       element.style.transform = `translate(${renderPosition.x}px, ${renderPosition.y}px)`;
-      this.scheduleEdgeRender();
-      this.scheduleMinimapRender();
+      if (!this.shouldUseCanvasEdges()) this.scheduleEdgeRender(connectedEdgeIds, { geometryOnly: true });
+      this.markMinimapDirty();
     };
 
     const end = (endEvent) => {
@@ -2195,7 +2462,8 @@ export class NewTopoGraph {
       window.setTimeout(() => {
         if (this.suppressNodeClick === node.id) this.suppressNodeClick = null;
       }, 0);
-      this.renderEdges();
+      this.renderEdges(connectedEdgeIds);
+      this.scheduleMinimapRender();
       if (this.selectionEnabled) this.setSelection({ nodes: [node.id], edges: [], primary: { type: "node", id: node.id } });
       else this.setSelectedItem({ type: "node", id: node.id });
       this.handleNodeClick?.(node);
@@ -2215,12 +2483,73 @@ export class NewTopoGraph {
     }
   }
 
-  scheduleEdgeRender() {
-    if (this.edgeRenderFrame) return;
+  scheduleEdgeRender(edgeIds = null, { geometryOnly = false } = {}) {
+    if (edgeIds == null) {
+      this.pendingEdgeRenderIds = null;
+      this.pendingEdgeGeometryOnly = false;
+    } else if (this.pendingEdgeRenderIds !== null) {
+      for (const id of edgeIds) this.pendingEdgeRenderIds.add(id);
+      this.pendingEdgeGeometryOnly = this.pendingEdgeGeometryOnly && geometryOnly;
+    } else if (!this.edgeRenderFrame) {
+      this.pendingEdgeRenderIds = new Set(edgeIds);
+      this.pendingEdgeGeometryOnly = Boolean(geometryOnly);
+    }
+
+    if (this.edgeRenderFrame) {
+      if (!geometryOnly) this.pendingEdgeGeometryOnly = false;
+      return;
+    }
     this.edgeRenderFrame = requestAnimationFrame(() => {
       this.edgeRenderFrame = null;
-      this.renderEdges();
+      const edgeIdsToRender = this.pendingEdgeRenderIds;
+      const shouldOnlyUpdateGeometry = Boolean(edgeIdsToRender && this.pendingEdgeGeometryOnly);
+      this.pendingEdgeRenderIds = null;
+      this.pendingEdgeGeometryOnly = false;
+      if (shouldOnlyUpdateGeometry) this.renderEdgeGeometryUpdates(edgeIdsToRender);
+      else this.renderEdges(edgeIdsToRender);
     });
+  }
+
+  renderEdgeGeometryUpdates(edgeIds = []) {
+    if (this.shouldUseCanvasEdges()) {
+      this.scheduleCanvasEdgeRender();
+      return;
+    }
+    const missingEdgeIds = [];
+    for (const edgeId of edgeIds) {
+      const edge = this.edgeById.get(edgeId);
+      const element = this.edgeElementById.get(edgeId);
+      if (!edge || !element || !this.updateEdgeElementGeometry(element, edge)) {
+        missingEdgeIds.push(edgeId);
+      }
+    }
+    if (missingEdgeIds.length) this.renderEdges(missingEdgeIds);
+  }
+
+  updateEdgeElementGeometry(element, edge) {
+    const source = this.nodeById.get(edge.source);
+    const target = this.nodeById.get(edge.target);
+    if (!source || !target) return false;
+    const path = buildEdgePath(
+      this.getRenderedNode(source),
+      this.getRenderedNode(target),
+      this.layout.options.rankDir || "LR",
+      edge,
+    );
+    element.__topoEdge = edge;
+    const visible = element.querySelector(".topo-edge-path");
+    if (visible) {
+      visible.setAttribute("d", path.d);
+      setStatusClass(visible, edge.data?.status || "ok");
+    }
+    element.querySelector(".topo-edge-hit")?.setAttribute("d", path.d);
+    const label = element.querySelector(".topo-edge-label");
+    if (label) {
+      label.setAttribute("x", String(path.label.x));
+      label.setAttribute("y", String(path.label.y));
+    }
+    element.querySelector(".topo-edge-add")?.setAttribute("transform", `translate(${path.label.x}, ${path.label.y + 20})`);
+    return true;
   }
 
   activateHoverHighlight(nodeId) {
@@ -2243,14 +2572,16 @@ export class NewTopoGraph {
 
     for (let level = 0; level < maxDegree && frontier.size; level += 1) {
       const next = new Set();
-      for (const edge of this.edges) {
-        const touchesFrontier = frontier.has(edge.source) || frontier.has(edge.target);
-        if (!touchesFrontier) continue;
-        relatedEdges.add(edge.id);
-        if (!relatedNodes.has(edge.source)) next.add(edge.source);
-        if (!relatedNodes.has(edge.target)) next.add(edge.target);
-        relatedNodes.add(edge.source);
-        relatedNodes.add(edge.target);
+      for (const frontierNodeId of frontier) {
+        for (const edgeId of this.edgeIdsByNodeId.get(frontierNodeId) || []) {
+          const edge = this.edgeById.get(edgeId);
+          if (!edge) continue;
+          relatedEdges.add(edge.id);
+          if (!relatedNodes.has(edge.source)) next.add(edge.source);
+          if (!relatedNodes.has(edge.target)) next.add(edge.target);
+          relatedNodes.add(edge.source);
+          relatedNodes.add(edge.target);
+        }
       }
       frontier = next;
     }
@@ -2266,31 +2597,56 @@ export class NewTopoGraph {
     });
   }
 
-  scheduleMinimapRender() {
-    if (!this.minimapSvg || this.minimapRenderFrame) return;
+  scheduleMinimapRender({ viewportOnly = false } = {}) {
+    if (!this.minimapSvg) return;
+    if (!this.minimapEnabled) {
+      this.pendingMinimapRenderViewportOnly = false;
+      return;
+    }
+    if (!viewportOnly) this.markMinimapDirty();
+    const shouldOnlyUpdateViewport = viewportOnly && !this.minimapStaticDirty;
+    if (this.minimapRenderFrame) {
+      this.pendingMinimapRenderViewportOnly = this.pendingMinimapRenderViewportOnly && shouldOnlyUpdateViewport;
+      return;
+    }
+    this.pendingMinimapRenderViewportOnly = shouldOnlyUpdateViewport;
     this.minimapRenderFrame = requestAnimationFrame(() => {
       this.minimapRenderFrame = null;
-      this.renderMinimap();
+      const renderViewportOnly = this.pendingMinimapRenderViewportOnly && !this.minimapStaticDirty;
+      this.pendingMinimapRenderViewportOnly = false;
+      this.renderMinimap({ viewportOnly: renderViewportOnly });
     });
   }
 
-  renderMinimap() {
+  renderMinimap({ viewportOnly = false } = {}) {
     if (!this.minimapSvg) return;
-    this.minimapSvg.innerHTML = "";
     this.root.classList.toggle("has-minimap", this.minimapEnabled);
-    if (!this.minimapEnabled || !this.nodes.length) return;
+    if (!this.minimapEnabled || !this.nodes.length) {
+      this.minimapSvg.innerHTML = "";
+      this.minimapViewportElement = null;
+      this.minimapTransform = null;
+      this.markMinimapDirty();
+      return;
+    }
+
+    if (viewportOnly && this.minimapViewportElement && this.minimapTransform) {
+      this.updateMinimapViewport(this.minimapTransform);
+      return;
+    }
 
     const transform = this.getMinimapTransform();
     if (!transform) return;
 
     const { width, height, scale, offsetX, offsetY, bounds } = transform;
+    this.minimapSvg.innerHTML = "";
+    this.minimapViewportElement = null;
     this.minimapSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
 
     const defs = document.createElementNS(SVG_NS, "defs");
     defs.innerHTML = `<filter id="${this.minimapShadowId}" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-color="#0f172a" flood-opacity="0.12"/></filter>`;
     this.minimapSvg.appendChild(defs);
 
-    const nodeById = new Map(this.nodes.map((node) => [node.id, node]));
+    const nodeById = this.nodeById;
     if (this.edges.length <= this.minimapEdgeLimit) {
       const edgeLayer = document.createElementNS(SVG_NS, "g");
       edgeLayer.classList.add("topo-minimap-edges");
@@ -2298,16 +2654,16 @@ export class NewTopoGraph {
         const source = nodeById.get(edge.source);
         const target = nodeById.get(edge.target);
         if (!source || !target) continue;
-      const sourceSize = getNodeSize(source);
-      const targetSize = getNodeSize(target);
-      const sourcePosition = this.getNodeAbsolutePosition(source);
-      const targetPosition = this.getNodeAbsolutePosition(target);
-      const line = document.createElementNS(SVG_NS, "line");
-      line.classList.add("topo-minimap-edge");
-      line.setAttribute("x1", String(offsetX + (sourcePosition.x + sourceSize.width / 2 - bounds.x) * scale));
-      line.setAttribute("y1", String(offsetY + (sourcePosition.y + sourceSize.height / 2 - bounds.y) * scale));
-      line.setAttribute("x2", String(offsetX + (targetPosition.x + targetSize.width / 2 - bounds.x) * scale));
-      line.setAttribute("y2", String(offsetY + (targetPosition.y + targetSize.height / 2 - bounds.y) * scale));
+        const sourceSize = getNodeSize(source);
+        const targetSize = getNodeSize(target);
+        const sourcePosition = this.getNodeAbsolutePosition(source);
+        const targetPosition = this.getNodeAbsolutePosition(target);
+        const line = document.createElementNS(SVG_NS, "line");
+        line.classList.add("topo-minimap-edge");
+        line.setAttribute("x1", String(offsetX + (sourcePosition.x + sourceSize.width / 2 - bounds.x) * scale));
+        line.setAttribute("y1", String(offsetY + (sourcePosition.y + sourceSize.height / 2 - bounds.y) * scale));
+        line.setAttribute("x2", String(offsetX + (targetPosition.x + targetSize.width / 2 - bounds.x) * scale));
+        line.setAttribute("y2", String(offsetY + (targetPosition.y + targetSize.height / 2 - bounds.y) * scale));
         edgeLayer.appendChild(line);
       }
       this.minimapSvg.appendChild(edgeLayer);
@@ -2326,20 +2682,30 @@ export class NewTopoGraph {
       rect.setAttribute("height", String(Math.max(2, size.height * scale)));
       rect.setAttribute("rx", "1.5");
       rect.setAttribute("fill", node.data?.color || getDomainColor(node.data?.domain, node.data?.status || "ok"));
-      rect.setAttribute("filter", `url(#${this.minimapShadowId})`);
+      if (!this.performanceMode && this.nodes.length <= 1000) rect.setAttribute("filter", `url(#${this.minimapShadowId})`);
       nodeLayer.appendChild(rect);
     }
     this.minimapSvg.appendChild(nodeLayer);
 
-    const viewport = this.getVisibleGraphRect();
     const viewportRect = document.createElementNS(SVG_NS, "rect");
     viewportRect.classList.add("topo-minimap-viewport");
+    this.minimapViewportElement = viewportRect;
+    this.minimapSvg.appendChild(viewportRect);
+    this.minimapStaticDirty = false;
+    this.minimapTransform = transform;
+    this.updateMinimapViewport(transform);
+  }
+
+  updateMinimapViewport(transform = this.getMinimapTransform()) {
+    if (!transform || !this.minimapViewportElement) return;
+    const { scale, offsetX, offsetY, bounds } = transform;
+    const viewport = this.getVisibleGraphRect();
+    const viewportRect = this.minimapViewportElement;
     viewportRect.setAttribute("x", String(offsetX + (viewport.x - bounds.x) * scale));
     viewportRect.setAttribute("y", String(offsetY + (viewport.y - bounds.y) * scale));
     viewportRect.setAttribute("width", String(Math.max(8, viewport.width * scale)));
     viewportRect.setAttribute("height", String(Math.max(8, viewport.height * scale)));
     viewportRect.setAttribute("rx", "2.5");
-    this.minimapSvg.appendChild(viewportRect);
   }
 
   getMinimapTransform() {
@@ -2374,55 +2740,115 @@ export class NewTopoGraph {
     };
   }
 
-  renderHoverHighlight() {
+  renderHoverHighlight({ force = false } = {}) {
     const state = this.hoverState;
     const hasState = Boolean(state);
     this.root.classList.toggle("has-hover-highlight", hasState);
 
-    this.root.querySelectorAll(".topo-node").forEach((element) => {
-      const related = hasState && state.relatedNodes.has(element.dataset.nodeId);
-      element.classList.toggle("is-hover-related", related);
-      element.classList.toggle("is-hover-dimmed", hasState && !related);
-    });
+    const previous = this.renderedHover || { nodes: new Set(), edges: new Set() };
+    const nextNodes = hasState ? state.relatedNodes : new Set();
+    const nextEdges = hasState ? state.relatedEdges : new Set();
 
-    this.root.querySelectorAll(".topo-edge").forEach((element) => {
-      const related = hasState && state.relatedEdges.has(element.dataset.edgeId);
-      element.classList.toggle("is-hover-related", related);
-      element.classList.toggle("is-hover-dimmed", hasState && !related);
-    });
+    for (const id of previous.nodes) {
+      if (!force && nextNodes.has(id)) continue;
+      this.nodeElementById.get(id)?.classList.remove("is-hover-related");
+    }
+    for (const id of previous.edges) {
+      if (!force && nextEdges.has(id)) continue;
+      this.edgeElementById.get(id)?.classList.remove("is-hover-related");
+    }
+    for (const id of nextNodes) {
+      if (!force && previous.nodes.has(id)) continue;
+      this.nodeElementById.get(id)?.classList.add("is-hover-related");
+    }
+    for (const id of nextEdges) {
+      if (!force && previous.edges.has(id)) continue;
+      this.edgeElementById.get(id)?.classList.add("is-hover-related");
+    }
+
+    this.renderedHover = {
+      nodes: new Set(nextNodes),
+      edges: new Set(nextEdges),
+    };
   }
 
-  renderSelection() {
-    this.root.querySelectorAll(".is-selected, .is-multi-selected").forEach((item) => {
-      item.classList.remove("is-selected", "is-multi-selected");
-    });
+  renderSelection({ force = false } = {}) {
+    const previous = this.renderedSelection || { nodes: new Set(), edges: new Set(), primary: null };
+    const nextNodes = new Set(this.selectionEnabled ? this.selection?.nodes || [] : []);
+    const nextEdges = new Set(this.selectionEnabled ? this.selection?.edges || [] : []);
+    const nextPrimary = this.selected ? { ...this.selected } : null;
+
+    for (const id of previous.nodes) {
+      if (!force && nextNodes.has(id)) continue;
+      this.nodeElementById.get(id)?.classList.remove("is-multi-selected");
+    }
+    for (const id of previous.edges) {
+      if (!force && nextEdges.has(id)) continue;
+      this.edgeElementById.get(id)?.classList.remove("is-multi-selected");
+    }
+    if (previous.primary && (force || !arePrimarySelectionsEqual(previous.primary, nextPrimary))) {
+      this.getGraphElement(previous.primary.type, previous.primary.id)?.classList.remove("is-selected");
+    }
+
     if (this.selectionEnabled) {
-      const selection = this.selection || { nodes: [], edges: [] };
-      for (const id of selection.nodes || []) {
-        this.root.querySelector(`.topo-node[data-node-id="${cssEscape(id)}"]`)?.classList.add("is-multi-selected");
+      for (const id of nextNodes) {
+        if (!force && previous.nodes.has(id)) continue;
+        this.nodeElementById.get(id)?.classList.add("is-multi-selected");
       }
-      for (const id of selection.edges || []) {
-        this.root.querySelector(`.topo-edge[data-edge-id="${cssEscape(id)}"]`)?.classList.add("is-multi-selected");
+      for (const id of nextEdges) {
+        if (!force && previous.edges.has(id)) continue;
+        this.edgeElementById.get(id)?.classList.add("is-multi-selected");
       }
     }
-    if (!this.selected) return;
-    const selector = this.selected.type === "node"
-      ? `.topo-node[data-node-id="${cssEscape(this.selected.id)}"]`
-      : `.topo-edge[data-edge-id="${cssEscape(this.selected.id)}"]`;
-    const selectedElement = this.root.querySelector(selector);
-    selectedElement?.classList.add("is-selected");
-    if (this.selectionEnabled) selectedElement?.classList.add("is-multi-selected");
+    if (nextPrimary) {
+      const selectedElement = this.getGraphElement(nextPrimary.type, nextPrimary.id);
+      selectedElement?.classList.add("is-selected");
+      if (this.selectionEnabled) selectedElement?.classList.add("is-multi-selected");
+    }
+
+    this.renderedSelection = {
+      nodes: nextNodes,
+      edges: nextEdges,
+      primary: nextPrimary,
+    };
+  }
+
+  getGraphElement(type, id) {
+    if (type === "node") return this.nodeElementById.get(id);
+    if (type === "edge") return this.edgeElementById.get(id);
+    return null;
   }
 
   applyViewport() {
     const value = `translate(${this.viewport.x}px, ${this.viewport.y}px) scale(${this.viewport.zoom})`;
+    const deferredEdges = this.markViewportInteraction();
     this.svg.style.transform = value;
     this.nodeLayer.style.transform = value;
-    this.scheduleMinimapRender();
+    if (this.shouldUseCanvasEdges() && !deferredEdges) this.scheduleCanvasEdgeRender();
+    this.scheduleMinimapRender({ viewportOnly: true });
     this.container.dispatchEvent(new CustomEvent("topo:viewport", {
       detail: { ...this.viewport },
       bubbles: true,
     }));
+  }
+
+  markViewportInteraction() {
+    if (!this.hideEdgesOnViewportMove || !this.performanceMode || this.nodes.length + this.edges.length < this.performanceTotalElementLimit) return false;
+    this.root.classList.add("is-viewport-moving");
+    if (this.viewportInteractionTimer) clearTimeout(this.viewportInteractionTimer);
+    this.viewportInteractionTimer = window.setTimeout(() => {
+      this.viewportInteractionTimer = null;
+      this.root.classList.remove("is-viewport-moving");
+      if (this.shouldUseCanvasEdges()) this.scheduleCanvasEdgeRender();
+    }, this.viewportInteractionSettleMs);
+    return true;
+  }
+
+  graphPointToViewport(point) {
+    return {
+      x: point.x * this.viewport.zoom + this.viewport.x,
+      y: point.y * this.viewport.zoom + this.viewport.y,
+    };
   }
 
   getBounds(nodes = this.nodes) {
@@ -2514,7 +2940,7 @@ export class NewTopoGraph {
       return { x: Number(position.x) || 0, y: Number(position.y) || 0 };
     }
     visited.add(node.id);
-    const parent = this.nodes.find((item) => item.id === node.parentId);
+    const parent = this.nodeById.get(node.parentId);
     if (!parent) return { x: Number(position.x) || 0, y: Number(position.y) || 0 };
     const parentPosition = this.getNodeAbsolutePosition(parent, visited);
     return {
@@ -2532,7 +2958,7 @@ export class NewTopoGraph {
 
   toStoredNodePosition(node, absolutePosition) {
     if (!node.parentId) return absolutePosition;
-    const parent = this.nodes.find((item) => item.id === node.parentId);
+    const parent = this.nodeById.get(node.parentId);
     if (!parent) return absolutePosition;
     const parentPosition = this.getNodeAbsolutePosition(parent);
     return {
@@ -2567,6 +2993,26 @@ function renderNodeContent(node, type = "cardNode") {
     if (rendered != null) return rendered;
   }
   return renderDefaultNodeContent(node, type);
+}
+
+function getNodeContentKey(node, type = "cardNode", performanceMode = false) {
+  const data = node.data || {};
+  if (performanceMode && !getNodeShape(type)) {
+    return [
+      type,
+      node.id,
+      data.title || data._fields?.title || "",
+      data.subTitle || data.summary || data._fields?.summary || data.name || data.domain || "",
+      data.icon || data.style?.iconClass || "",
+      data.badge || data.alarm || "",
+      data.label || "",
+    ].join("|");
+  }
+  return JSON.stringify({
+    type,
+    id: node.id,
+    data,
+  });
 }
 
 function renderDefaultNodeContent(node, type = "cardNode") {
@@ -2679,6 +3125,14 @@ function renderNodeMetric(data) {
 }
 
 function buildEdgePath(source, target, rankDir, edge = {}) {
+  const geometry = buildEdgeGeometry(source, target, rankDir, edge);
+  return {
+    d: `M ${geometry.from.x} ${geometry.from.y} C ${geometry.c1.x} ${geometry.c1.y}, ${geometry.c2.x} ${geometry.c2.y}, ${geometry.to.x} ${geometry.to.y}`,
+    label: geometry.label,
+  };
+}
+
+function buildEdgeGeometry(source, target, rankDir, edge = {}) {
   const sourceSize = getNodeSize(source);
   const targetSize = getNodeSize(target);
   const parallelOffset = Number(edge.data?.parallelOffset || 0);
@@ -2697,7 +3151,10 @@ function buildEdgePath(source, target, rankDir, edge = {}) {
     const to = offsetPoint(baseTo, normal, parallelOffset);
     const mid = (from.y + to.y) / 2;
     return {
-      d: `M ${from.x} ${from.y} C ${from.x} ${mid}, ${to.x} ${mid}, ${to.x} ${to.y}`,
+      from,
+      c1: { x: from.x, y: mid },
+      c2: { x: to.x, y: mid },
+      to,
       label: { x: (from.x + to.x) / 2, y: mid - 8 },
     };
   }
@@ -2728,9 +3185,31 @@ function buildEdgePath(source, target, rankDir, edge = {}) {
   const shiftedC1 = offsetPoint(c1, normal, parallelOffset);
   const shiftedC2 = offsetPoint(c2, normal, parallelOffset);
   return {
-    d: `M ${shiftedFrom.x} ${shiftedFrom.y} C ${shiftedC1.x} ${shiftedC1.y}, ${shiftedC2.x} ${shiftedC2.y}, ${shiftedTo.x} ${shiftedTo.y}`,
+    from: shiftedFrom,
+    c1: shiftedC1,
+    c2: shiftedC2,
+    to: shiftedTo,
     label: { x: (shiftedFrom.x + shiftedTo.x) / 2, y: (shiftedFrom.y + shiftedTo.y) / 2 - 8 },
   };
+}
+
+function viewportBoxToGeometryNode(box) {
+  return {
+    position: { x: box.x, y: box.y },
+    data: { size: { width: box.width, height: box.height } },
+  };
+}
+
+function isEdgeGeometryVisible(geometry, width, height, margin = 0) {
+  const points = [geometry.from, geometry.c1, geometry.c2, geometry.to];
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  return maxX >= -margin
+    && minX <= width + margin
+    && maxY >= -margin
+    && minY <= height + margin;
 }
 
 function getNormal(dx, dy) {
@@ -2782,6 +3261,24 @@ function getDomainColor(domain, status) {
     queue: "#ea580c",
   };
   return colors[domain] || colors[status] || "#2563eb";
+}
+
+function getEdgeCanvasColor(status = "ok") {
+  const colors = {
+    ok: "#8ba4bd",
+    warn: "#d9822b",
+    critical: "#d64545",
+    running: "#0064c8",
+  };
+  return colors[status] || colors.ok;
+}
+
+function setStatusClass(element, status = "ok") {
+  if (!element?.classList) return;
+  for (const name of [...element.classList]) {
+    if (name.startsWith("status-")) element.classList.remove(name);
+  }
+  element.classList.add(`status-${status}`);
 }
 
 function getRelatedData(focusId, nodes, edges, { degree = 1, direction = "both" } = {}) {
@@ -2932,6 +3429,11 @@ function areSelectionsEqual(left = {}, right = {}) {
     && arrayEqual(left.edges || [], right.edges || [])
     && (left.primary?.type || "") === (right.primary?.type || "")
     && (left.primary?.id || "") === (right.primary?.id || "");
+}
+
+function arePrimarySelectionsEqual(left = null, right = null) {
+  return (left?.type || "") === (right?.type || "")
+    && (left?.id || "") === (right?.id || "");
 }
 
 function arrayEqual(left, right) {
