@@ -38,6 +38,18 @@ window.__opentopoxPerf.getSummary();
 
 Node 基准用于验证布局、数据层和调度器核心路径；浏览器页面用于验证首屏渲染、增量 patch、鼠标拖拽/视口移动和长帧计数。
 
+## 通用交互优化
+
+以下优化不是大图专用，在几十到几百节点的低数量级场景也默认生效：
+
+- 节点、关系、父子关系会维护运行时索引，避免点击、聚焦、拖动和 patch 时反复线性查找。
+- 节点拖动和轻量 patch 只更新受影响节点及关联关系，避免重绘无关边。
+- hover 和 selection 使用前后状态 diff 更新 class，避免每次交互扫描全部 DOM。
+- `fitView({ nodes })`、框选 connected 边和 `handleFocusNode()` 走索引/邻接路径，避免嵌套查找或每一跳扫描全量边。
+- minimap 在视口移动时只更新 viewport 框，只有数据或布局变化时才重建静态内容。
+
+Canvas 边层、交互期隐藏边层和性能模式下跳过节点尺寸测量属于大图降载策略，由对应阈值或性能模式控制。
+
 ## Graph Store 设计
 
 `TopologyGraphStore` 是实时链路的权威数据层，不直接操作 DOM。
