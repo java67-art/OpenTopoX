@@ -243,12 +243,17 @@
 }
 
 .topo-viewport,
+.topo-edge-canvas,
 .topo-svg,
 .topo-node-layer {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+.topo-edge-canvas {
+  pointer-events: none;
 }
 
 .topo-svg,
@@ -528,7 +533,7 @@
     0 14px 28px rgba(0, 100, 200, 0.18);
 }
 
-.new-topo-graph.has-hover-highlight .topo-node.is-hover-dimmed:not(.is-selected):not(.is-multi-selected) {
+.new-topo-graph.has-hover-highlight .topo-node:not(.is-hover-related):not(.is-selected):not(.is-multi-selected) {
   opacity: 0.28;
   filter: saturate(0.45);
 }
@@ -683,11 +688,11 @@
   stroke-width: 3.25px;
 }
 
-.new-topo-graph.has-hover-highlight .topo-edge.is-hover-dimmed .topo-edge-path {
+.new-topo-graph.has-hover-highlight .topo-edge:not(.is-hover-related) .topo-edge-path {
   opacity: 0.12;
 }
 
-.new-topo-graph.has-hover-highlight .topo-edge.is-hover-dimmed .topo-edge-label {
+.new-topo-graph.has-hover-highlight .topo-edge:not(.is-hover-related) .topo-edge-label {
   opacity: 0.18;
 }
 
@@ -1002,6 +1007,13 @@
 
 .new-topo-graph.is-performance .topo-edge-path {
   stroke-width: 1.5;
+}
+
+.new-topo-graph.is-performance.is-viewport-moving .topo-svg,
+.new-topo-graph.is-performance.is-viewport-moving .topo-edge-canvas,
+.new-topo-graph.is-performance.is-node-dragging .topo-svg,
+.new-topo-graph.is-performance.is-node-dragging .topo-edge-canvas {
+  visibility: hidden;
 }
 
 .topo-detail-empty,

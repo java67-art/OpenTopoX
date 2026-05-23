@@ -23,7 +23,20 @@ Node 核心路径：
 npm run benchmark:topology
 ```
 
-本仓库当前只内置 Node 核心路径基准。若接入方增加浏览器基准脚本，建议同时覆盖首屏渲染、增量 patch、视口缩放和长任务计数。
+浏览器大图验证页：
+
+```sh
+npm run serve
+```
+
+然后打开 <http://127.0.0.1:5177/examples/performance-large-graph/>。该页面默认生成 5,000 个节点和 10,000 条关系，提供 Pan Test、Patch Test、Fit 和 Minimap 控制，也可在控制台调用：
+
+```js
+await window.__opentopoxPerf.runFullValidation();
+window.__opentopoxPerf.getSummary();
+```
+
+Node 基准用于验证布局、数据层和调度器核心路径；浏览器页面用于验证首屏渲染、增量 patch、鼠标拖拽/视口移动和长帧计数。
 
 ## Graph Store 设计
 
@@ -155,6 +168,35 @@ new NewTopoGraph({
 ```
 
 大图下框架会自动关闭过量边标签。
+
+### 大图拖动画布时 SVG 边绘制压力过高
+
+性能模式下，大图边默认会切到 Canvas 边层，避免为 10k 级关系常驻创建大量 SVG DOM。视口移动和节点拖拽期间也会临时隐藏边层，停止移动后自动恢复，以保证拖拽/平移优先达到交互帧率。可按需调整：
+
+```js
+new NewTopoGraph({
+  config: {
+    canvasEdges: true,
+    canvasEdgeThreshold: 2000,
+    hideEdgesOnViewportMove: true,
+    viewportInteractionSettleMs: 220,
+  },
+});
+```
+
+如果业务必须保留 SVG 边 DOM 或自定义 SVG 边交互，可关闭 Canvas 边层，或调高切换阈值：
+
+```js
+new NewTopoGraph({
+  config: {
+    canvasEdges: false,
+    // 或 canvasEdgeThreshold: 8000,
+    hideEdgesOnViewportMove: false,
+  },
+});
+```
+
+Canvas 模式下关系仍会绘制在节点之间，但 `.topo-edge` SVG 元素数量会降为 0；这是预期行为，适合只需要展示连线、不依赖单条 SVG 边 DOM 事件的大图场景。
 
 ### 消息乱序或旧数据覆盖新数据
 
